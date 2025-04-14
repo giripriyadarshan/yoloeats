@@ -10,6 +10,7 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 mod handlers;
 use handlers::create_user_profile;
 
+mod cache;
 mod errors;
 mod models;
 mod state;

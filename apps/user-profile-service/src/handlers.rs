@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tracing::{debug, error, info, instrument};
 use validator::Validate;
 
-const USER_PROFILE_COLLECTION: &str = "user_profiles"; // Define collection name centrally
+pub(crate) const USER_PROFILE_COLLECTION: &str = "user_profiles"; // Define collection name centrally
 
 #[instrument(skip(state, payload), fields(username = %payload.username, email = %payload.email))]
 pub async fn create_user_profile(
