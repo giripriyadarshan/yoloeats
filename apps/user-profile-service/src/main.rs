@@ -1,6 +1,6 @@
 use axum::{
     Router,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use rust_database_clients::{create_mongo_client, create_redis_client, load_config};
 use std::{env, net::SocketAddr, sync::Arc};
@@ -8,7 +8,7 @@ use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod handlers;
-use handlers::{create_user_profile, get_user_profile_by_id};
+use handlers::{create_user_profile, get_user_profile_by_id, update_user_profile};
 
 mod cache;
 mod errors;
@@ -68,7 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let user_routes = Router::new()
         .route("/", post(create_user_profile)) // POST /api/v1/users
-        .route("/{id}", get(get_user_profile_by_id)); // GET /api/v1/users/:id
+        .route("/{id}", get(get_user_profile_by_id)) // GET /api/v1/users/:id
+        .route("/{id}", patch(update_user_profile)); // PATCH /api/v1/users/:id
 
     let app = Router::new()
         .route("/", get(root_handler)) // Health check at the root

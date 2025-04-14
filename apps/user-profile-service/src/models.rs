@@ -62,3 +62,22 @@ pub struct CreateUserProfilePayload {
     #[serde(default)]
     pub dietary_preferences: Option<Vec<String>>,
 }
+
+/// Payload for updating an existing user profile via the API.
+/// All fields are optional, allowing partial updates.
+#[derive(Deserialize, Validate, Debug, Default)]
+pub struct UpdateUserProfilePayload {
+    #[validate(length(min = 3, message = "Username must be at least 3 characters long"))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+
+    #[validate(email(message = "Invalid email format"))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allergies: Option<Vec<String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dietary_preferences: Option<Vec<String>>,
+}
