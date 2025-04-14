@@ -94,6 +94,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "User Profile Service successfully started, listening on {}",
         addr
     );
+    tracing::warn!(
+        "Warning: No authentication/authorization implemented yet. Service is currently insecure."
+    );
     axum::serve(listener, app.into_make_service())
         .await
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
