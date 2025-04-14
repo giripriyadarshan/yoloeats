@@ -8,7 +8,7 @@ use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod handlers;
-use handlers::create_user_profile;
+use handlers::{create_user_profile, get_user_profile_by_id};
 
 mod cache;
 mod errors;
@@ -66,7 +66,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         redis_client,
     });
 
-    let user_routes = Router::new().route("/", post(create_user_profile)); // POST /api/v1/users
+    let user_routes = Router::new()
+        .route("/", post(create_user_profile)) // POST /api/v1/users
+        .route("/:id", get(get_user_profile_by_id)); // GET /api/v1/users/:id
 
     let app = Router::new()
         .route("/", get(root_handler)) // Health check at the root
