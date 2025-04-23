@@ -6,6 +6,7 @@ use rust_database_clients::{create_mongo_client, create_redis_client, load_confi
 use std::{env, net::SocketAddr, sync::Arc};
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use tower_http::cors::{Any, CorsLayer};
 
 mod handlers;
 use handlers::{create_user_profile, get_user_profile_by_id, update_user_profile};
@@ -65,6 +66,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mongo_db,
         redis_client,
     });
+    
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
 
     let user_routes = Router::new()
         .route("/", post(create_user_profile)) // POST /api/v1/users
@@ -74,6 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/", get(root_handler)) // Health check at the root
         .nest("/api/v1/users", user_routes) // Nest user routes under /api/v1/users
+        .layer(cors)
         .with_state(app_state); // state
 
     let port_str = env::var("USER_PROFILE_SERVICE_PORT").unwrap_or_else(|_| {
