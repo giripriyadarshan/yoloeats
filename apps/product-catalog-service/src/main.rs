@@ -2,8 +2,14 @@ use axum::{routing::get, Router};
 use dotenvy::dotenv;
 use rust_database_clients::{create_mongo_client, create_redis_client, load_config};
 use std::{env, net::SocketAddr, sync::Arc};
+use axum::routing::post;
 use tracing::{error, info, warn};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+use crate::handlers::{
+    get_product_by_id, get_product_by_barcode, search_products,
+    create_product, update_product, delete_product
+};
 
 mod db_setup;
 mod errors;
@@ -50,8 +56,14 @@ async fn main() -> Result<(), ServiceError> {
     });
     info!("Application state created.");
 
+    let product_routes = Router::new()
+        .route("/", post(create_product).get(search_products))
+        .route("/id/:id", get(get_product_by_id).patch(update_product).delete(delete_product))
+        .route("/barcode/:code", get(get_product_by_barcode));
+
     let app = Router::new()
         .route("/", get(health_check))
+        .nest("/api/v1/products", product_routes)
         .with_state(app_state);
 
     info!("Axum router configured.");

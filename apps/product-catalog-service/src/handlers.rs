@@ -1,3 +1,10 @@
+use axum::http::StatusCode;
+use chrono::Utc;
+use mongodb::{
+    error::ErrorKind,
+    options::{FindOneAndUpdateOptions, ReturnDocument},
+};
+use crate::models::{CreateProductPayload, UpdateProductPayload};
 use crate::{
     errors::{Result, ServiceError},
     models::{Product, SearchParams},
@@ -240,4 +247,219 @@ pub async fn search_products(
     info!("Found {} products matching search criteria.", products.len());
 
     Ok(Json(products))
+}
+
+#[instrument(skip(state, payload), fields(code = %payload.code, name = ?payload.product_name))]
+pub async fn create_product(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<CreateProductPayload>,
+) -> Result<(StatusCode, Json<Product>)> {
+    info!("Attempting to create product");
+
+    // TODO: Add payload validation using `validator` if enabled in models.rs
+    // payload.validate().map_err(|e| ... ServiceError::BadRequest(...))?;
+
+    let now = Utc::now();
+    let mut new_product = Product {
+        id: None,
+        code: payload.code,
+        product_name: payload.product_name,
+        generic_name: None,
+        brands: payload.brands,
+        quantity: None,
+        categories: payload.categories,
+        main_category: None,
+        labels: None,
+        ingredients_text: payload.ingredients_text,
+        allergens_tags: None,
+        image_url: None,
+        image_small_url: None,
+        countries: None,
+        nutrition_grade_fr: None,
+        creator: Some("api_create".to_string()),
+        source: Some("api_create_v1".to_string()),
+        created_at: now,
+        last_modified_at: now,
+    };
+    debug!(product = ?new_product, "Constructed new product struct");
+
+    let collection = state.mongo_db.collection::<Product>("products");
+    debug!("Obtained handle to collection: products");
+
+    let insert_result = collection.insert_one(&new_product).await.map_err(|e| {
+        if let ErrorKind::Write(mongodb::error::WriteFailure::WriteError(write_error)) =
+            *e.kind.clone()
+        {
+            if write_error.code == 11000 {
+                error!("Duplicate key error on insert: {}", e);
+                return ServiceError::BadRequest("Product with this code already exists.".to_string());
+            }
+        }
+        error!("Failed to insert product into DB: {}", e);
+        ServiceError::MongoDb(e)
+    })?;
+    info!(
+        "Successfully inserted new product with ID: {}",
+        insert_result.inserted_id
+    );
+
+    new_product.id = insert_result.inserted_id.as_object_id();
+
+    info!(id = %new_product.id.unwrap(), "Returning created product");
+    Ok((StatusCode::CREATED, Json(new_product)))
+}
+
+
+#[instrument(skip(state, payload), fields(id = %id_str))]
+pub async fn update_product(
+    State(state): State<Arc<AppState>>,
+    Path(id_str): Path<String>,
+    Json(payload): Json<UpdateProductPayload>,
+) -> Result<Json<Product>> {
+    info!("Attempting to update product ID: {}", id_str);
+
+    let object_id = ObjectId::parse_str(&id_str).map_err(|e| {
+        error!("Invalid ObjectId format '{}': {}", id_str, e);
+        ServiceError::BadRequest(format!("Invalid product ID format: {}", id_str))
+    })?;
+    debug!("Parsed ObjectId: {}", object_id);
+
+    let mut set_doc = doc! {};
+    if let Some(val) = payload.product_name { set_doc.insert("product_name", val); }
+    if let Some(val) = payload.generic_name { set_doc.insert("generic_name", val); }
+    if let Some(val) = payload.image_url { set_doc.insert("image_url", val); }
+    if let Some(val) = payload.ingredients_text { set_doc.insert("ingredients_text", val); }
+    if let Some(val) = payload.brands { set_doc.insert("brands_tags", val); }
+    if let Some(val) = payload.categories { set_doc.insert("categories_tags", val); }
+    if let Some(val) = payload.labels { set_doc.insert("labels_tags", val); }
+    if let Some(val) = payload.traces { set_doc.insert("traces_tags", val); }
+    if let Some(val) = payload.quantity { set_doc.insert("quantity", val); }
+    if let Some(val) = payload.countries { set_doc.insert("countries_tags", val); }
+    if let Some(val) = payload.nutrition_grade_fr { set_doc.insert("nutrition_grade_fr", val); }
+
+    if set_doc.is_empty() {
+        warn!(id = %object_id, "Update request received with no fields to update.");
+        let collection = state.mongo_db.collection::<Product>("products");
+        return collection.find_one(doc! {"_id": object_id}).await
+            .map_err(ServiceError::MongoDb)?
+            .map(Json)
+            .ok_or_else(|| ServiceError::NotFound(format!("Product with ID {} not found", object_id)));
+    }
+
+    set_doc.insert("last_modified_datetime", Utc::now());
+
+    let update_doc = doc! { "$set": set_doc };
+    debug!(id = %object_id, update = ?update_doc, "Constructed update document");
+
+    let collection = state.mongo_db.collection::<Product>("products");
+    let options = FindOneAndUpdateOptions::builder()
+        .return_document(ReturnDocument::After)
+        .build();
+
+    let update_result = collection
+        .find_one_and_update(doc! {"_id": object_id}, update_doc)
+        .with_options(options)
+        .await;
+
+    match update_result {
+        Ok(Some(updated_product)) => {
+            info!(id = %object_id, "Successfully updated product in DB");
+
+            let id_key = product_id_cache_key(&object_id);
+            let code_key = product_code_cache_key(&updated_product.code);
+
+            debug!(id = %object_id, code=%updated_product.code, keys=format!("{}, {}", id_key, code_key), "Attempting to invalidate cache");
+            match state.redis_client.get_multiplexed_async_connection().await {
+                Ok(mut redis_conn) => {
+                    match redis::cmd("DEL").arg(&[&id_key, &code_key]).query_async::<i64>(&mut redis_conn).await {
+                        Ok(deleted_count) => info!(id = %object_id, count=deleted_count, "Cache invalidation DEL command successful ({} keys)", deleted_count),
+                        Err(e) => warn!(id = %object_id, "Failed to invalidate cache (DEL command failed): {}", e),
+                    }
+                }
+                Err(e) => warn!(id = %object_id, "Failed to get Redis connection for cache invalidation: {}", e),
+            }
+
+            Ok(Json(updated_product))
+        }
+        Ok(None) => {
+            error!(id = %object_id, "Product not found for update");
+            Err(ServiceError::NotFound(format!("Product with ID {} not found for update", object_id)))
+        }
+        Err(e) => {
+            if let ErrorKind::Write(mongodb::error::WriteFailure::WriteError(write_error)) = *e.kind.clone() {
+                if write_error.code == 11000 {
+                    error!("Duplicate key error on update: {}", e);
+                    return Err(ServiceError::BadRequest("Update failed due to duplicate key (e.g., code already exists).".to_string()));
+                }
+            }
+            error!(id = %object_id, "Failed to update product in DB: {}", e);
+            Err(ServiceError::MongoDb(e))
+        }
+    }
+}
+
+
+#[instrument(skip(state), fields(id = %id_str))]
+pub async fn delete_product(
+    State(state): State<Arc<AppState>>,
+    Path(id_str): Path<String>,
+) -> Result<StatusCode> {
+    info!("Attempting to delete product ID: {}", id_str);
+
+    let object_id = ObjectId::parse_str(&id_str).map_err(|e| {
+        error!("Invalid ObjectId format '{}': {}", id_str, e);
+        ServiceError::BadRequest(format!("Invalid product ID format: {}", id_str))
+    })?;
+    debug!("Parsed ObjectId: {}", object_id);
+
+    let collection = state.mongo_db.collection::<Product>("products");
+
+    let product_to_delete = collection
+        .find_one(doc! { "_id": object_id })
+        .projection(doc! { "code": 1 })
+        .await
+        .map_err(|e| {
+            error!(id = %object_id, "MongoDB find_one before delete failed: {}", e);
+            ServiceError::MongoDb(e)
+        })?;
+
+    let product_code = match product_to_delete {
+        Some(p) => p.code,
+        None => {
+            info!(id = %object_id, "Product not found for deletion");
+            return Err(ServiceError::NotFound(format!("Product with ID {} not found for deletion", object_id)));
+        }
+    };
+    debug!(id = %object_id, code = %product_code, "Found product code for cache invalidation");
+
+    let delete_result = collection
+        .delete_one(doc! { "_id": object_id })
+        .await
+        .map_err(|e| {
+            error!(id = %object_id, "MongoDB delete_one failed: {}", e);
+            ServiceError::MongoDb(e)
+        })?;
+
+    if delete_result.deleted_count > 0 {
+        info!(id = %object_id, code=%product_code, "Successfully deleted product from DB");
+
+        let id_key = product_id_cache_key(&object_id);
+        let code_key = product_code_cache_key(&product_code);
+
+        debug!(id = %object_id, code=%product_code, keys=format!("{}, {}", id_key, code_key), "Attempting to invalidate cache");
+        match state.redis_client.get_multiplexed_async_connection().await {
+            Ok(mut redis_conn) => {
+                match redis::cmd("DEL").arg(&[&id_key, &code_key]).query_async::<i64>(&mut redis_conn).await {
+                    Ok(deleted_count) => info!(id = %object_id, count=deleted_count, "Cache invalidation DEL command successful ({} keys)", deleted_count),
+                    Err(e) => warn!(id = %object_id, "Failed to invalidate cache (DEL command failed): {}", e),
+                }
+            }
+            Err(e) => warn!(id = %object_id, "Failed to get Redis connection for cache invalidation: {}", e),
+        }
+
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        warn!(id = %object_id, "Product found initially but delete_one reported 0 deleted count.");
+        Err(ServiceError::NotFound(format!("Product with ID {} found but failed to delete", object_id)))
+    }
 }
