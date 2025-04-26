@@ -1,28 +1,26 @@
-use axum::{routing::get, Router};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use dotenvy::dotenv;
 use rust_database_clients::{create_mongo_client, create_redis_client, load_config};
 use std::{env, net::SocketAddr, sync::Arc};
-use axum::routing::post;
 use tracing::{error, info, warn};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-
-use crate::handlers::{
-    get_product_by_id, get_product_by_barcode, search_products,
-    create_product, update_product, delete_product
-};
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod db_setup;
 mod errors;
+mod handlers;
 mod models;
 mod state;
-mod handlers;
 
 use errors::ServiceError;
 use state::AppState;
 
-async fn health_check() -> &'static str {
-    "Product Catalog Service OK"
-}
+use crate::handlers::{
+    create_product, delete_product, get_product_by_barcode, get_product_by_id, search_products,
+    update_product,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), ServiceError> {
@@ -36,17 +34,11 @@ async fn main() -> Result<(), ServiceError> {
     info!("Starting Product Catalog Service...");
 
     let (mongo_uri, redis_uri) = load_config()?;
-
     let mongo_client = create_mongo_client(&mongo_uri).await?;
-    info!("Successfully connected to MongoDB.");
-
     let db_handle = mongo_client.database("yoloeats_catalog");
-    info!("Using MongoDB database: {}", db_handle.name());
-
     let redis_client_handle = create_redis_client(&redis_uri)?;
-    info!("Successfully connected to Redis.");
+    info!("Database connections established.");
 
-    info!("Attempting to create MongoDB indexes...");
     db_setup::create_indexes(&db_handle).await?;
     info!("MongoDB indexes checked/created successfully.");
 
@@ -56,27 +48,31 @@ async fn main() -> Result<(), ServiceError> {
     });
     info!("Application state created.");
 
-    let product_routes = Router::new()
-        .route("/", post(create_product).get(search_products))
-        .route("/id/:id", get(get_product_by_id).patch(update_product).delete(delete_product))
+    let api_routes = Router::new()
+        .route("/", post(create_product))
+        .route("/search", get(search_products))
+        .route(
+            "/:id",
+            get(get_product_by_id)
+                .put(update_product)
+                .delete(delete_product),
+        )
         .route("/barcode/:code", get(get_product_by_barcode));
 
     let app = Router::new()
-        .route("/", get(health_check))
-        .nest("/api/v1/products", product_routes)
+        .nest("/api/v1/products", api_routes)
+        .route("/", get(|| async { "Product Catalog Service OK" }))
+        // TODO: Add CORS layer here in the next step
         .with_state(app_state);
 
-    info!("Axum router configured.");
+    info!("Axum router configured with API routes.");
 
     let port_str = env::var("PRODUCT_CATALOG_SERVICE_PORT").unwrap_or_else(|_| {
         info!("PRODUCT_CATALOG_SERVICE_PORT not set, defaulting to 8002");
         "8002".to_string()
     });
     let port = port_str.parse::<u16>().unwrap_or_else(|_| {
-        error!(
-            "Invalid port '{}' specified, defaulting to 8002",
-            port_str
-        );
+        error!("Invalid port '{}' specified, defaulting to 8002", port_str);
         8002
     });
 
