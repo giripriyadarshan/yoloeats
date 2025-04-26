@@ -1,22 +1,22 @@
-use axum::http::StatusCode;
-use chrono::Utc;
-use mongodb::{
-    error::ErrorKind,
-    options::{FindOneAndUpdateOptions, ReturnDocument},
-};
 use crate::models::{CreateProductPayload, UpdateProductPayload};
 use crate::{
     errors::{Result, ServiceError},
     models::{Product, SearchParams},
     state::AppState,
 };
+use axum::http::StatusCode;
 use axum::{
-    extract::{Path, Query, State},
     Json,
+    extract::{Path, Query, State},
 };
 use bson::{doc, oid::ObjectId};
+use chrono::Utc;
 use futures::stream::TryStreamExt;
 use mongodb::options::FindOptions;
+use mongodb::{
+    error::ErrorKind,
+    options::{FindOneAndUpdateOptions, ReturnDocument},
+};
 use redis::AsyncCommands;
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
@@ -39,7 +39,7 @@ pub async fn get_product_by_id(
     Path(id_str): Path<String>,
 ) -> Result<Json<Product>> {
     info!("Attempting to get product by ID: {}", id_str);
-    
+
     let object_id = ObjectId::parse_str(&id_str).map_err(|e| {
         error!("Invalid ObjectId format '{}': {}", id_str, e);
         ServiceError::BadRequest(format!("Invalid product ID format: {}", id_str))
@@ -47,7 +47,7 @@ pub async fn get_product_by_id(
     debug!("Parsed ObjectId: {}", object_id);
 
     let cache_key = product_id_cache_key(&object_id);
-    
+
     let mut redis_conn = state
         .redis_client
         .get_multiplexed_async_connection()
@@ -69,7 +69,7 @@ pub async fn get_product_by_id(
                     error!(id = %object_id, "Failed to deserialize cached product (ID): {}. Fetching from DB.", e);
                 }
             }
-        },
+        }
         Ok(_) => {
             debug!(id = %object_id, "Cache miss for product ID (empty value).");
         }
@@ -95,9 +95,14 @@ pub async fn get_product_by_id(
             Ok(product_json) => {
                 match redis_conn
                     .set_ex::<_, _, ()>(&cache_key, &product_json, CACHE_EXPIRATION_SECONDS)
-                    .await {
-                    Ok(_) => info!(id = %object_id, key = %cache_key, "Successfully cached product (ID) in Redis"),
-                    Err(e) => warn!(id = %object_id, key = %cache_key, "Failed to cache product (ID) in Redis (SETEX): {}", e),
+                    .await
+                {
+                    Ok(_) => {
+                        info!(id = %object_id, key = %cache_key, "Successfully cached product (ID) in Redis")
+                    }
+                    Err(e) => {
+                        warn!(id = %object_id, key = %cache_key, "Failed to cache product (ID) in Redis (SETEX): {}", e)
+                    }
                 }
             }
             Err(e) => warn!(id = %object_id, "Failed to serialize product for caching (ID): {}", e),
@@ -105,10 +110,12 @@ pub async fn get_product_by_id(
         Ok(Json(product))
     } else {
         info!(id = %object_id, "Product not found by ID");
-        Err(ServiceError::NotFound(format!("Product with ID {} not found", object_id)))
+        Err(ServiceError::NotFound(format!(
+            "Product with ID {} not found",
+            object_id
+        )))
     }
 }
-
 
 #[instrument(skip(state), fields(code = %barcode))]
 pub async fn get_product_by_barcode(
@@ -118,7 +125,7 @@ pub async fn get_product_by_barcode(
     info!("Attempting to get product by barcode: {}", barcode);
 
     let cache_key = product_code_cache_key(&barcode);
-    
+
     let mut redis_conn = state
         .redis_client
         .get_multiplexed_async_connection()
@@ -140,7 +147,7 @@ pub async fn get_product_by_barcode(
                     error!(code = %barcode, "Failed to deserialize cached product (code): {}. Fetching from DB.", e);
                 }
             }
-        },
+        }
         Ok(_) => {
             debug!(code = %barcode, "Cache miss for product barcode (empty value).");
         }
@@ -158,7 +165,7 @@ pub async fn get_product_by_barcode(
             error!(code = %barcode, "MongoDB find_one by code failed: {}", e);
             ServiceError::MongoDb(e)
         })?;
-    
+
     if let Some(product) = db_product {
         info!(id = product.id.as_ref().map(|id| id.to_string()).unwrap_or_default(), code = %barcode, "Product found in DB by barcode");
 
@@ -166,18 +173,28 @@ pub async fn get_product_by_barcode(
             Ok(product_json) => {
                 match redis_conn
                     .set_ex::<_, _, ()>(&cache_key, &product_json, CACHE_EXPIRATION_SECONDS)
-                    .await {
-                    Ok(_) => info!(code = %barcode, key = %cache_key, "Successfully cached product (code) in Redis"),
-                    Err(e) => warn!(code = %barcode, key = %cache_key, "Failed to cache product (code) in Redis (SETEX): {}", e),
+                    .await
+                {
+                    Ok(_) => {
+                        info!(code = %barcode, key = %cache_key, "Successfully cached product (code) in Redis")
+                    }
+                    Err(e) => {
+                        warn!(code = %barcode, key = %cache_key, "Failed to cache product (code) in Redis (SETEX): {}", e)
+                    }
                 }
             }
-            Err(e) => warn!(code = %barcode, "Failed to serialize product for caching (code): {}", e),
+            Err(e) => {
+                warn!(code = %barcode, "Failed to serialize product for caching (code): {}", e)
+            }
         }
 
         Ok(Json(product))
     } else {
         info!(code = %barcode, "Product not found by barcode");
-        Err(ServiceError::NotFound(format!("Product with barcode {} not found", barcode)))
+        Err(ServiceError::NotFound(format!(
+            "Product with barcode {} not found",
+            barcode
+        )))
     }
 }
 
@@ -189,7 +206,7 @@ pub async fn search_products(
     info!("Searching products with parameters: {:?}", params);
 
     let mut filter = doc! {};
-    
+
     if let Some(q) = &params.q {
         if !q.trim().is_empty() {
             filter.insert("$text", doc! { "$search": q.trim() });
@@ -222,29 +239,38 @@ pub async fn search_products(
     }
 
     debug!("Constructed MongoDB filter: {:?}", filter);
-    
-    let limit = params.limit.unwrap_or(DEFAULT_SEARCH_LIMIT).min(MAX_SEARCH_LIMIT);
+
+    let limit = params
+        .limit
+        .unwrap_or(DEFAULT_SEARCH_LIMIT)
+        .min(MAX_SEARCH_LIMIT);
     let skip = params.offset.unwrap_or(0);
-    let find_options = FindOptions::builder().limit(limit as i64).skip(skip).build();
+    let find_options = FindOptions::builder()
+        .limit(limit as i64)
+        .skip(skip)
+        .build();
     debug!("Applying pagination: limit={}, skip={}", limit, skip);
 
     let collection = state.mongo_db.collection::<Product>("products");
-    
+
     let cursor = collection
-        .find(filter) 
-        .with_options(find_options) 
-        .await 
+        .find(filter)
+        .with_options(find_options)
+        .await
         .map_err(|e| {
             error!("MongoDB find operation failed: {}", e);
             ServiceError::MongoDb(e)
         })?;
-    
+
     let products: Vec<Product> = cursor.try_collect().await.map_err(|e| {
         error!("Error collecting results from MongoDB cursor: {}", e);
         ServiceError::MongoDb(e)
     })?;
 
-    info!("Found {} products matching search criteria.", products.len());
+    info!(
+        "Found {} products matching search criteria.",
+        products.len()
+    );
 
     Ok(Json(products))
 }
@@ -292,7 +318,9 @@ pub async fn create_product(
         {
             if write_error.code == 11000 {
                 error!("Duplicate key error on insert: {}", e);
-                return ServiceError::BadRequest("Product with this code already exists.".to_string());
+                return ServiceError::BadRequest(
+                    "Product with this code already exists.".to_string(),
+                );
             }
         }
         error!("Failed to insert product into DB: {}", e);
@@ -309,7 +337,6 @@ pub async fn create_product(
     Ok((StatusCode::CREATED, Json(new_product)))
 }
 
-
 #[instrument(skip(state, payload), fields(id = %id_str))]
 pub async fn update_product(
     State(state): State<Arc<AppState>>,
@@ -325,25 +352,51 @@ pub async fn update_product(
     debug!("Parsed ObjectId: {}", object_id);
 
     let mut set_doc = doc! {};
-    if let Some(val) = payload.product_name { set_doc.insert("product_name", val); }
-    if let Some(val) = payload.generic_name { set_doc.insert("generic_name", val); }
-    if let Some(val) = payload.image_url { set_doc.insert("image_url", val); }
-    if let Some(val) = payload.ingredients_text { set_doc.insert("ingredients_text", val); }
-    if let Some(val) = payload.brands { set_doc.insert("brands_tags", val); }
-    if let Some(val) = payload.categories { set_doc.insert("categories_tags", val); }
-    if let Some(val) = payload.labels { set_doc.insert("labels_tags", val); }
-    if let Some(val) = payload.traces { set_doc.insert("traces_tags", val); }
-    if let Some(val) = payload.quantity { set_doc.insert("quantity", val); }
-    if let Some(val) = payload.countries { set_doc.insert("countries_tags", val); }
-    if let Some(val) = payload.nutrition_grade_fr { set_doc.insert("nutrition_grade_fr", val); }
+    if let Some(val) = payload.product_name {
+        set_doc.insert("product_name", val);
+    }
+    if let Some(val) = payload.generic_name {
+        set_doc.insert("generic_name", val);
+    }
+    if let Some(val) = payload.image_url {
+        set_doc.insert("image_url", val);
+    }
+    if let Some(val) = payload.ingredients_text {
+        set_doc.insert("ingredients_text", val);
+    }
+    if let Some(val) = payload.brands {
+        set_doc.insert("brands_tags", val);
+    }
+    if let Some(val) = payload.categories {
+        set_doc.insert("categories_tags", val);
+    }
+    if let Some(val) = payload.labels {
+        set_doc.insert("labels_tags", val);
+    }
+    if let Some(val) = payload.traces {
+        set_doc.insert("traces_tags", val);
+    }
+    if let Some(val) = payload.quantity {
+        set_doc.insert("quantity", val);
+    }
+    if let Some(val) = payload.countries {
+        set_doc.insert("countries_tags", val);
+    }
+    if let Some(val) = payload.nutrition_grade_fr {
+        set_doc.insert("nutrition_grade_fr", val);
+    }
 
     if set_doc.is_empty() {
         warn!(id = %object_id, "Update request received with no fields to update.");
         let collection = state.mongo_db.collection::<Product>("products");
-        return collection.find_one(doc! {"_id": object_id}).await
+        return collection
+            .find_one(doc! {"_id": object_id})
+            .await
             .map_err(ServiceError::MongoDb)?
             .map(Json)
-            .ok_or_else(|| ServiceError::NotFound(format!("Product with ID {} not found", object_id)));
+            .ok_or_else(|| {
+                ServiceError::NotFound(format!("Product with ID {} not found", object_id))
+            });
     }
 
     set_doc.insert("last_modified_datetime", Utc::now());
@@ -371,25 +424,43 @@ pub async fn update_product(
             debug!(id = %object_id, code=%updated_product.code, keys=format!("{}, {}", id_key, code_key), "Attempting to invalidate cache");
             match state.redis_client.get_multiplexed_async_connection().await {
                 Ok(mut redis_conn) => {
-                    match redis::cmd("DEL").arg(&[&id_key, &code_key]).query_async::<i64>(&mut redis_conn).await {
-                        Ok(deleted_count) => info!(id = %object_id, count=deleted_count, "Cache invalidation DEL command successful ({} keys)", deleted_count),
-                        Err(e) => warn!(id = %object_id, "Failed to invalidate cache (DEL command failed): {}", e),
+                    match redis::cmd("DEL")
+                        .arg(&[&id_key, &code_key])
+                        .query_async::<i64>(&mut redis_conn)
+                        .await
+                    {
+                        Ok(deleted_count) => {
+                            info!(id = %object_id, count=deleted_count, "Cache invalidation DEL command successful ({} keys)", deleted_count)
+                        }
+                        Err(e) => {
+                            warn!(id = %object_id, "Failed to invalidate cache (DEL command failed): {}", e)
+                        }
                     }
                 }
-                Err(e) => warn!(id = %object_id, "Failed to get Redis connection for cache invalidation: {}", e),
+                Err(e) => {
+                    warn!(id = %object_id, "Failed to get Redis connection for cache invalidation: {}", e)
+                }
             }
 
             Ok(Json(updated_product))
         }
         Ok(None) => {
             error!(id = %object_id, "Product not found for update");
-            Err(ServiceError::NotFound(format!("Product with ID {} not found for update", object_id)))
+            Err(ServiceError::NotFound(format!(
+                "Product with ID {} not found for update",
+                object_id
+            )))
         }
         Err(e) => {
-            if let ErrorKind::Write(mongodb::error::WriteFailure::WriteError(write_error)) = *e.kind.clone() {
+            if let ErrorKind::Write(mongodb::error::WriteFailure::WriteError(write_error)) =
+                *e.kind.clone()
+            {
                 if write_error.code == 11000 {
                     error!("Duplicate key error on update: {}", e);
-                    return Err(ServiceError::BadRequest("Update failed due to duplicate key (e.g., code already exists).".to_string()));
+                    return Err(ServiceError::BadRequest(
+                        "Update failed due to duplicate key (e.g., code already exists)."
+                            .to_string(),
+                    ));
                 }
             }
             error!(id = %object_id, "Failed to update product in DB: {}", e);
@@ -397,7 +468,6 @@ pub async fn update_product(
         }
     }
 }
-
 
 #[instrument(skip(state), fields(id = %id_str))]
 pub async fn delete_product(
@@ -427,7 +497,10 @@ pub async fn delete_product(
         Some(p) => p.code,
         None => {
             info!(id = %object_id, "Product not found for deletion");
-            return Err(ServiceError::NotFound(format!("Product with ID {} not found for deletion", object_id)));
+            return Err(ServiceError::NotFound(format!(
+                "Product with ID {} not found for deletion",
+                object_id
+            )));
         }
     };
     debug!(id = %object_id, code = %product_code, "Found product code for cache invalidation");
@@ -449,17 +522,30 @@ pub async fn delete_product(
         debug!(id = %object_id, code=%product_code, keys=format!("{}, {}", id_key, code_key), "Attempting to invalidate cache");
         match state.redis_client.get_multiplexed_async_connection().await {
             Ok(mut redis_conn) => {
-                match redis::cmd("DEL").arg(&[&id_key, &code_key]).query_async::<i64>(&mut redis_conn).await {
-                    Ok(deleted_count) => info!(id = %object_id, count=deleted_count, "Cache invalidation DEL command successful ({} keys)", deleted_count),
-                    Err(e) => warn!(id = %object_id, "Failed to invalidate cache (DEL command failed): {}", e),
+                match redis::cmd("DEL")
+                    .arg(&[&id_key, &code_key])
+                    .query_async::<i64>(&mut redis_conn)
+                    .await
+                {
+                    Ok(deleted_count) => {
+                        info!(id = %object_id, count=deleted_count, "Cache invalidation DEL command successful ({} keys)", deleted_count)
+                    }
+                    Err(e) => {
+                        warn!(id = %object_id, "Failed to invalidate cache (DEL command failed): {}", e)
+                    }
                 }
             }
-            Err(e) => warn!(id = %object_id, "Failed to get Redis connection for cache invalidation: {}", e),
+            Err(e) => {
+                warn!(id = %object_id, "Failed to get Redis connection for cache invalidation: {}", e)
+            }
         }
 
         Ok(StatusCode::NO_CONTENT)
     } else {
         warn!(id = %object_id, "Product found initially but delete_one reported 0 deleted count.");
-        Err(ServiceError::NotFound(format!("Product with ID {} found but failed to delete", object_id)))
+        Err(ServiceError::NotFound(format!(
+            "Product with ID {} found but failed to delete",
+            object_id
+        )))
     }
 }

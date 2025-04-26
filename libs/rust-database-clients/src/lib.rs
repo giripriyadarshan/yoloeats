@@ -1,4 +1,4 @@
-use mongodb::{options::ClientOptions, Client as MongoClient};
+use mongodb::{Client as MongoClient, options::ClientOptions};
 use redis::Client as RedisClient;
 use redis::Commands;
 use std::env;
@@ -25,10 +25,10 @@ pub enum ClientCreationError {
 pub fn load_config() -> Result<(String, String), ConfigError> {
     dotenvy::dotenv().ok();
 
-    let mongo_uri = env::var("MONGO_URI")
-        .map_err(|_| ConfigError::MissingVariable("MONGO_URI".to_string()))?;
-    let redis_uri = env::var("REDIS_URI")
-        .map_err(|_| ConfigError::MissingVariable("REDIS_URI".to_string()))?;
+    let mongo_uri =
+        env::var("MONGO_URI").map_err(|_| ConfigError::MissingVariable("MONGO_URI".to_string()))?;
+    let redis_uri =
+        env::var("REDIS_URI").map_err(|_| ConfigError::MissingVariable("REDIS_URI".to_string()))?;
 
     Ok((mongo_uri, redis_uri))
 }
@@ -58,11 +58,10 @@ pub fn create_redis_client(redis_uri: &str) -> Result<RedisClient, redis::RedisE
 
 #[cfg(test)]
 mod tests {
-    
+
     use super::*;
     #[test]
     fn config_loading_requires_env_vars() {
-        
         let result = load_config();
         assert!(result.is_err());
         if let Err(ConfigError::MissingVariable(_)) = result {

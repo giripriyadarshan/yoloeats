@@ -1,7 +1,7 @@
+use bson::serde_helpers::chrono_datetime_as_bson_datetime;
 use chrono::{DateTime, Utc};
 use mongodb::bson::oid::ObjectId;
 use serde::{Deserialize, Serialize};
-use bson::serde_helpers::chrono_datetime_as_bson_datetime;
 // use validator::Validate;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -40,9 +40,11 @@ pub struct Product {
 
     #[serde(rename = "created_datetime", with = "chrono_datetime_as_bson_datetime")]
     pub created_at: DateTime<Utc>,
-    #[serde(rename = "last_modified_datetime", with = "chrono_datetime_as_bson_datetime")]
+    #[serde(
+        rename = "last_modified_datetime",
+        with = "chrono_datetime_as_bson_datetime"
+    )]
     pub last_modified_at: DateTime<Utc>,
-
 }
 
 #[derive(Debug, Serialize, Deserialize)]
