@@ -45,7 +45,7 @@ pub struct Product {
 
 }
 
-#[derive(Debug, Serialize, Deserialize /*, Validate*/)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CreateProductPayload {
     pub code: String,
     pub product_name: Option<String>,
@@ -54,7 +54,7 @@ pub struct CreateProductPayload {
     pub categories: Option<Vec<String>>,
 }
 
-#[derive(Debug, Serialize, Deserialize /*, Validate*/)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct UpdateProductPayload {
     pub product_name: Option<String>,
     pub generic_name: Option<String>,
@@ -67,4 +67,16 @@ pub struct UpdateProductPayload {
     pub quantity: Option<String>,
     pub countries: Option<Vec<String>>,
     pub nutrition_grade_fr: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchParams {
+    pub q: Option<String>,
+    pub category: Option<String>,
+    pub brand: Option<String>,
+    pub label: Option<String>,
+    pub country: Option<String>,
+    pub nutriscore: Option<String>,
+    pub limit: Option<u64>,
+    pub offset: Option<u64>,
 }

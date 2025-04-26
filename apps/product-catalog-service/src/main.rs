@@ -9,6 +9,7 @@ mod db_setup;
 mod errors;
 mod models;
 mod state;
+mod handlers;
 
 use errors::ServiceError;
 use state::AppState;
@@ -83,6 +84,6 @@ async fn main() -> Result<(), ServiceError> {
     axum::serve(listener, app.into_make_service())
         .await
         .map_err(ServiceError::Io)?;
-    
+
     Ok(())
 }
