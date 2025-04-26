@@ -5,6 +5,7 @@ use axum::{
 use dotenvy::dotenv;
 use rust_database_clients::{create_mongo_client, create_redis_client, load_config};
 use std::{env, net::SocketAddr, sync::Arc};
+use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -21,6 +22,10 @@ use crate::handlers::{
     create_product, delete_product, get_product_by_barcode, get_product_by_id, search_products,
     update_product,
 };
+
+async fn health_check() -> &'static str {
+    "Product Catalog Service OK"
+}
 
 #[tokio::main]
 async fn main() -> Result<(), ServiceError> {
@@ -48,6 +53,12 @@ async fn main() -> Result<(), ServiceError> {
     });
     info!("Application state created.");
 
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+    info!("CORS layer configured (permissive for development).");
+
     let api_routes = Router::new()
         .route("/", post(create_product))
         .route("/search", get(search_products))
@@ -61,11 +72,11 @@ async fn main() -> Result<(), ServiceError> {
 
     let app = Router::new()
         .nest("/api/v1/products", api_routes)
-        .route("/", get(|| async { "Product Catalog Service OK" }))
-        // TODO: Add CORS layer here in the next step
+        .route("/", get(health_check))
+        .layer(cors)
         .with_state(app_state);
 
-    info!("Axum router configured with API routes.");
+    info!("Axum router configured with routes and CORS.");
 
     let port_str = env::var("PRODUCT_CATALOG_SERVICE_PORT").unwrap_or_else(|_| {
         info!("PRODUCT_CATALOG_SERVICE_PORT not set, defaulting to 8002");
