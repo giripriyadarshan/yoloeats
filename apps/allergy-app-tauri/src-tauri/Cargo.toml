@@ -28,4 +28,5 @@ dotenvy = "0.15.7"
 thiserror = "2.0.12"
 base64 = "0.22.1"
 tflite = "0.9.8"
+tracing = "0.1.41"
 
