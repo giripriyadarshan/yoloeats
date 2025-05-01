@@ -1,7 +1,0 @@
-# Contents for: src-tauri/.cargo/config.toml
-
-[env]
-CC_x86_64-unknown-linux-gnu = "g++"
-CFLAGS_x86_64-unknown-linux-gnu = "-fpermissive"
-# Explicitly add -include cstdint here along with -fpermissive
-CXXFLAGS_x86_64-unknown-linux-gnu = "-include cstdint -fpermissive"
