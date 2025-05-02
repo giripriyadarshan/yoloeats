@@ -1,249 +1,214 @@
 use crate::{
-    cache,
     errors::{AppError, Result},
-    models::{CreateUserProfilePayload, UpdateUserProfilePayload, UserProfile},
+    models::{UpdateProfilePayload, UserProfile},
     state::AppState,
 };
-use axum::{
-    Json,
-    extract::{Path, State},
-    http::StatusCode,
-};
-use bson::{DateTime, doc, oid::ObjectId};
+use axum::{Json, extract::State};
+use bson::doc;
 use chrono::Utc;
 use mongodb::{
     Collection,
     error::ErrorKind,
     options::{FindOneAndUpdateOptions, ReturnDocument},
 };
+use redis::AsyncCommands;
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
 use validator::Validate;
 
-pub(crate) const USER_PROFILE_COLLECTION: &str = "user_profiles"; // Define collection name centrally
+// TODO: Replace with actual user ID from authentication context
+const DUMMY_USER_ID: &str = "dummy-user-123";
+const PROFILE_CACHE_KEY_PREFIX: &str = "profile:";
+const CACHE_EXPIRATION_SECONDS: u64 = 3600;
 
-#[instrument(skip(state, payload), fields(username = %payload.username, email = %payload.email))]
-pub async fn create_user_profile(
-    State(state): State<Arc<AppState>>,
-    Json(payload): Json<CreateUserProfilePayload>,
-) -> Result<(StatusCode, Json<UserProfile>)> {
-    info!("Attempting to create user profile");
-
-    payload.validate().map_err(|e| {
-        error!("Payload validation failed: {}", e);
-        AppError::BadRequest(format!("Input validation failed: {}", e).replace('\n', ", "))
-    })?;
-    debug!("Payload validated successfully");
-
-    let new_profile = UserProfile::from_payload(payload);
-    debug!(profile = ?new_profile, "Constructed new user profile struct");
-
-    let collection: Collection<UserProfile> = state.mongo_db.collection(USER_PROFILE_COLLECTION);
-    debug!("Obtained handle to collection: {}", USER_PROFILE_COLLECTION);
-
-    let insert_result = collection.insert_one(&new_profile).await.map_err(|e| {
-        if let ErrorKind::Write(mongodb::error::WriteFailure::WriteError(write_error)) =
-            *e.kind.clone()
-        {
-            if write_error.code == 11000 {
-                error!("Duplicate key error on insert: {}", e);
-                return AppError::BadRequest("Username or email already exists.".to_string());
-            }
-        }
-        error!("Failed to insert user profile into DB: {}", e);
-        AppError::MongoDb(e)
-    })?;
-    info!(
-        "Successfully inserted new user profile with ID: {}",
-        insert_result.inserted_id
-    );
-
-    let created_id = insert_result.inserted_id.as_object_id().ok_or_else(|| {
-        error!(
-            "Failed to get ObjectId from insert result BSON: {:?}",
-            insert_result.inserted_id
-        );
-        AppError::Internal("Failed to extract ObjectId after insert".to_string())
-    })?;
-
-    let created_profile = collection
-        .find_one(doc! {"_id": created_id})
-        .await
-        .map_err(|e| {
-            error!(
-                "Failed to fetch newly created profile with ID {}: {}",
-                created_id, e
-            );
-            AppError::MongoDb(e)
-        })?
-        .ok_or_else(|| {
-            error!(
-                "Newly created profile with ID {} not found immediately after insert",
-                created_id
-            );
-            AppError::NotFound(format!(
-                "Profile with ID {} could not be retrieved after creation",
-                created_id
-            ))
-        })?;
-
-    info!(id = %created_id, "Returning created profile");
-    Ok((StatusCode::CREATED, Json(created_profile)))
+fn profile_cache_key(user_id: &str) -> String {
+    format!("{}{}", PROFILE_CACHE_KEY_PREFIX, user_id)
 }
 
-#[instrument(skip(state), fields(user_id = %user_id_str))]
-pub async fn get_user_profile_by_id(
-    State(state): State<Arc<AppState>>,
-    Path(user_id_str): Path<String>,
-) -> Result<Json<UserProfile>> {
-    info!("Attempting to get user profile by ID: {}", user_id_str);
+#[instrument(skip(state), fields(user_id = DUMMY_USER_ID))] // Log hardcoded ID for now
+pub async fn get_profile(State(state): State<Arc<AppState>>) -> Result<Json<UserProfile>> {
+    // TODO: Extract actual user_id from token/session/authentication context
+    let user_id = DUMMY_USER_ID;
+    info!("Attempting to get profile for user_id: {}", user_id);
 
-    let user_id = ObjectId::parse_str(&user_id_str).map_err(|e| {
-        error!(
-            "Invalid ObjectId format for user_id '{}': {}",
-            user_id_str, e
-        );
-        AppError::BadRequest(format!("Invalid user ID format: {}", user_id_str))
+    let cache_key = profile_cache_key(user_id);
+
+    let mut redis_conn = state.redis_client.get_multiplexed_async_connection().await
+        .map_err(|e| {
+            warn!(user_id = %user_id, "Failed to get Redis connection: {}. Proceeding without cache.", e);
+            AppError::Redis(e)
+        })?;
+
+    match redis_conn.get::<_, String>(&cache_key).await {
+        Ok(cached_profile_json) if !cached_profile_json.is_empty() => {
+            match serde_json::from_str::<UserProfile>(&cached_profile_json) {
+                Ok(profile) => {
+                    info!(user_id = %user_id, "Cache hit for user profile");
+                    return Ok(Json(profile));
+                }
+                Err(e) => {
+                    error!(user_id = %user_id, "Failed to deserialize cached profile: {}. Fetching from DB.", e);
+                }
+            }
+        }
+        Ok(_) => {
+            debug!(user_id = %user_id, "Cache miss for user profile.");
+        }
+        Err(e) => {
+            warn!(user_id = %user_id, "Redis GET command failed: {}. Fetching from DB.", e);
+        }
+    }
+
+    debug!(user_id = %user_id, "Fetching profile from MongoDB");
+    let collection = state.mongo_db.collection::<UserProfile>("user_profiles");
+    let filter = doc! { "user_id": user_id };
+
+    let db_profile = collection.find_one(filter).await.map_err(|e| {
+        error!(user_id = %user_id, "MongoDB find_one failed: {}", e);
+        AppError::MongoDb(e)
     })?;
-    debug!("Parsed user ID: {}", user_id);
 
-    // Use the caching logic from cache.rs
-    match cache::get_user_profile_by_id(&state, user_id).await {
-        Ok(Some(profile)) => {
-            info!(user_id = %user_id, "Profile found (via cache or DB)");
+    match db_profile {
+        Some(profile) => {
+            info!(user_id = %user_id, "Profile found in DB");
+            match serde_json::to_string(&profile) {
+                Ok(profile_json) => {
+                    match redis_conn
+                        .set_ex::<_, _, ()>(&cache_key, &profile_json, CACHE_EXPIRATION_SECONDS)
+                        .await
+                    {
+                        Ok(_) => {
+                            info!(user_id = %user_id, key = %cache_key, "Successfully cached profile in Redis")
+                        }
+                        Err(e) => {
+                            warn!(user_id = %user_id, key = %cache_key, "Failed to cache profile in Redis (SETEX): {}", e)
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(user_id = %user_id, "Failed to serialize profile for caching: {}", e)
+                }
+            }
             Ok(Json(profile))
         }
-        Ok(None) => {
-            info!(user_id = %user_id, "Profile not found");
+        None => {
+            info!(user_id = %user_id, "Profile not found in DB");
             Err(AppError::NotFound(format!(
-                "User profile with ID {} not found",
+                "Profile for user {} not found",
                 user_id
             )))
         }
-        Err(e) => {
-            // Errors from cache::get_user_profile_by_id are already logged
-            // Just propagate the AppError
-            Err(e)
-        }
     }
 }
 
-#[instrument(skip(state, payload), fields(user_id = %user_id_str))]
-pub async fn update_user_profile(
+#[instrument(skip(state, payload), fields(user_id = DUMMY_USER_ID))] // Log hardcoded ID for now
+pub async fn update_profile(
     State(state): State<Arc<AppState>>,
-    Path(user_id_str): Path<String>,
-    Json(payload): Json<UpdateUserProfilePayload>,
+    Json(payload): Json<UpdateProfilePayload>,
 ) -> Result<Json<UserProfile>> {
-    info!("Attempting to update user profile: {}", user_id_str);
+    // TODO: Extract actual user_id from token/session/authentication context
+    let user_id = DUMMY_USER_ID;
+    info!("Attempting to update profile for user_id: {}", user_id);
 
     payload.validate().map_err(|e| {
-        error!("Payload validation failed: {}", e);
+        error!(user_id = %user_id, "Payload validation failed: {}", e);
         AppError::BadRequest(format!("Input validation failed: {}", e).replace('\n', ", "))
     })?;
-    debug!("Payload validated successfully");
-
-    let user_id = ObjectId::parse_str(&user_id_str).map_err(|e| {
-        error!(
-            "Invalid ObjectId format for user_id '{}': {}",
-            user_id_str, e
-        );
-        AppError::BadRequest(format!("Invalid user ID format: {}", user_id_str))
-    })?;
-    debug!("Parsed user ID: {}", user_id);
+    debug!(user_id = %user_id, "Payload validated successfully");
 
     let mut set_doc = doc! {};
-    if let Some(username) = payload.username {
-        set_doc.insert("username", username);
+    if let Some(val) = payload.username {
+        set_doc.insert("username", val);
     }
-    if let Some(email) = payload.email {
-        set_doc.insert("email", email);
+    if let Some(val) = payload.email {
+        set_doc.insert("email", val);
     }
-    if let Some(allergies) = payload.allergies {
-        set_doc.insert("allergies", allergies);
+    if let Some(val) = payload.allergens {
+        set_doc.insert("allergens", val);
     }
-    if let Some(dietary_preferences) = payload.dietary_preferences {
-        set_doc.insert("dietary_preferences", dietary_preferences);
+    if let Some(val) = payload.dietary_prefs {
+        set_doc.insert("dietary_prefs", val);
+    }
+    if let Some(val) = payload.risk_tolerance {
+        set_doc.insert("risk_tolerance", bson::to_bson(&val)?);
     }
 
     if set_doc.is_empty() {
         warn!(user_id = %user_id, "Update request received with no fields to update.");
-        return match cache::get_user_profile_by_id(&state, user_id).await {
-            Ok(Some(profile)) => Ok(Json(profile)),
-            Ok(None) => Err(AppError::NotFound(format!(
-                "User profile with ID {} not found",
-                user_id
-            ))),
-            Err(e) => Err(e),
-        };
+        return Err(AppError::BadRequest(
+            "No fields provided for update.".to_string(),
+        ));
     }
 
-    set_doc.insert("updated_at", DateTime::from_chrono(Utc::now()));
+    let now = Utc::now();
+    set_doc.insert("updated_at", now);
 
-    let update_doc = doc! { "$set": set_doc };
-    debug!(user_id = %user_id, update = ?update_doc, "Constructed update document");
+    let set_on_insert_doc = doc! {
+        "user_id": user_id,
+        "created_at": now
+    };
 
-    let collection: Collection<UserProfile> = state.mongo_db.collection(USER_PROFILE_COLLECTION);
+    let update_doc = doc! {
+        "$set": set_doc,
+        "$setOnInsert": set_on_insert_doc
+    };
+    debug!(user_id = %user_id, update = ?update_doc, "Constructed upsert document");
+
+    let collection: Collection<UserProfile> = state.mongo_db.collection("user_profiles");
+    let filter = doc! { "user_id": user_id };
     let options = FindOneAndUpdateOptions::builder()
-        .return_document(ReturnDocument::After) // Return the document *after* the update
+        .upsert(true)
+        .return_document(ReturnDocument::After)
         .build();
 
     let update_result = collection
-        .find_one_and_update(doc! {"_id": user_id}, update_doc)
+        .find_one_and_update(filter, update_doc)
         .with_options(options)
         .await;
 
     match update_result {
         Ok(Some(updated_profile)) => {
-            info!(user_id = %user_id, "Successfully updated user profile in DB");
+            info!(user_id = %user_id, id = updated_profile.id.map(|id| id.to_string()).unwrap_or_default(), "Successfully upserted user profile in DB");
 
-            // Cache Invalidation
-            let cache_key = format!("user_profile:{}", user_id);
+            let cache_key = profile_cache_key(user_id);
             debug!(user_id = %user_id, key = %cache_key, "Attempting to invalidate cache");
             match state.redis_client.get_multiplexed_async_connection().await {
-                Ok(mut redis_conn) => {
-                    match redis::cmd("DEL")
-                        .arg(&cache_key)
-                        .query_async::<i64>(&mut redis_conn)
-                        .await
-                    {
-                        Ok(deleted_count) => {
-                            if deleted_count > 0 {
-                                info!(user_id = %user_id, key = %cache_key, "Successfully invalidated cache");
-                            } else {
-                                debug!(user_id = %user_id, key = %cache_key, "Cache key did not exist or was already expired");
-                            }
-                        }
-                        Err(e) => {
-                            warn!(user_id = %user_id, key = %cache_key, "Failed to invalidate cache (DEL command failed): {}", e);
-                        }
+                Ok(mut redis_conn) => match redis_conn.del::<_, i64>(&cache_key).await {
+                    Ok(deleted_count) if deleted_count > 0 => {
+                        info!(user_id = %user_id, key = %cache_key, "Successfully invalidated cache")
                     }
-                }
+                    Ok(_) => {
+                        debug!(user_id = %user_id, key = %cache_key, "Cache key did not exist for invalidation")
+                    }
+                    Err(e) => {
+                        warn!(user_id = %user_id, key = %cache_key, "Failed to invalidate cache (DEL command failed): {}", e)
+                    }
+                },
                 Err(e) => {
-                    warn!(user_id = %user_id, key = %cache_key, "Failed to get Redis connection for cache invalidation: {}", e);
+                    warn!(user_id = %user_id, key = %cache_key, "Failed to get Redis connection for cache invalidation: {}", e)
                 }
             }
 
             Ok(Json(updated_profile))
         }
         Ok(None) => {
-            error!(user_id = %user_id, "User profile not found for update");
-            Err(AppError::NotFound(format!(
-                "User profile with ID {} not found",
-                user_id
-            )))
+            error!(user_id = %user_id, "Upsert operation returned None unexpectedly.");
+            Err(AppError::Internal(
+                "Profile update failed unexpectedly.".to_string(),
+            ))
         }
         Err(e) => {
             if let ErrorKind::Write(mongodb::error::WriteFailure::WriteError(write_error)) =
                 *e.kind.clone()
             {
                 if write_error.code == 11000 {
-                    error!("Duplicate key error on update: {}", e);
+                    error!(user_id = %user_id, "Duplicate key error on upsert: {}", e);
                     return Err(AppError::BadRequest(
-                        "Username or email already exists.".to_string(),
+                        "Update failed due to conflicting unique key.".to_string(),
                     ));
                 }
             }
-            error!(user_id = %user_id, "Failed to update user profile in DB: {}", e);
+            error!(user_id = %user_id, "Failed to upsert profile in DB: {}", e);
             Err(AppError::MongoDb(e))
         }
     }

@@ -1,65 +1,49 @@
-use axum::{
-    Router,
-    routing::{get, patch, post},
-};
+use axum::{Router, routing::get};
+use handlers::{get_profile, update_profile};
 use rust_database_clients::{create_mongo_client, create_redis_client, load_config};
+use state::AppState;
 use std::{env, net::SocketAddr, sync::Arc};
 use tower_http::cors::{Any, CorsLayer};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-mod handlers;
-use handlers::{create_user_profile, get_user_profile_by_id, update_user_profile};
-
-mod cache;
 mod errors;
+mod handlers;
 mod models;
 mod state;
-use state::AppState;
 
 async fn root_handler() -> &'static str {
-    "User Profile Service OK"
+    "User Profile Service OK V2"
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
-    // Sets the default log level to "info" if RUST_LOG env var is not set
     tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .with(fmt::layer())
         .init();
 
-    info!("Starting User Profile Service...");
+    info!("Starting User Profile Service (V2)...");
 
-    let (mongo_uri, redis_uri) = match load_config() {
-        Ok(config) => config,
-        Err(e) => {
-            error!("Failed to load configuration: {}", e);
-            return Err(Box::new(e) as Box<dyn std::error::Error>);
-        }
-    };
+    let (mongo_uri, redis_uri) = load_config().map_err(|e| {
+        error!("Config loading failed: {}", e);
+        Box::new(e) as Box<dyn std::error::Error>
+    })?;
 
-    let mongo_client = match create_mongo_client(&mongo_uri).await {
-        Ok(client) => client,
-        Err(e) => {
-            error!("Failed to create MongoDB client: {}", e);
-            return Err(Box::new(e) as Box<dyn std::error::Error>);
-        }
-    };
+    let mongo_client = create_mongo_client(&mongo_uri).await.map_err(|e| {
+        error!("Mongo connection failed: {}", e);
+        Box::new(e) as Box<dyn std::error::Error>
+    })?;
     info!("MongoDB client created successfully.");
-
     let mongo_db = mongo_client.database("yoloeats_user_profile");
     info!("Using MongoDB database: {}", mongo_db.name());
 
-    let redis_client = match create_redis_client(&redis_uri) {
-        Ok(client) => client,
-        Err(e) => {
-            error!("Failed to create Redis client: {}", e);
-            return Err(Box::new(e) as Box<dyn std::error::Error>);
-        }
-    };
+    let redis_client = create_redis_client(&redis_uri).map_err(|e| {
+        error!("Redis connection failed: {}", e);
+        Box::new(e) as Box<dyn std::error::Error>
+    })?;
     info!("Redis client created successfully.");
 
     let app_state = Arc::new(AppState {
@@ -72,42 +56,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let user_routes = Router::new()
-        .route("/", post(create_user_profile)) // POST /api/v1/users
-        .route("/{id}", get(get_user_profile_by_id)) // GET /api/v1/users/:id
-        .route("/{id}", patch(update_user_profile)); // PATCH /api/v1/users/:id
+    let profile_routes = Router::new().route("/", get(get_profile).put(update_profile));
 
     let app = Router::new()
-        .route("/", get(root_handler)) // Health check at the root
-        .nest("/api/v1/users", user_routes) // Nest user routes under /api/v1/users
+        .route("/", get(root_handler))
+        .nest("/api/v1/profile", profile_routes)
         .layer(cors)
-        .with_state(app_state); // state
+        .with_state(app_state);
 
-    let port_str = env::var("USER_PROFILE_SERVICE_PORT").unwrap_or_else(|_| {
-        info!("USER_PROFILE_SERVICE_PORT not set, defaulting to 8001");
-        "8001".to_string()
-    });
-    let port = port_str.parse::<u16>().unwrap_or_else(|_| {
-        error!("Invalid port specified, defaulting to 8001");
-        8001
-    });
-
+    let port_str = env::var("USER_PROFILE_SERVICE_PORT").unwrap_or_else(|_| "8001".to_string());
+    let port = port_str.parse::<u16>().unwrap_or(8001);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("Server configured to listen on {}", addr);
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    warn!("Warning: Authentication not implemented.");
     info!(
-        "User Profile Service successfully started, listening on {}",
+        "User Profile Service (V2) successfully started, listening on {}",
         addr
     );
-    tracing::warn!(
-        "Warning: No authentication/authorization implemented yet. Service is currently insecure."
-    );
-    axum::serve(listener, app.into_make_service())
-        .await
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+
+    axum::serve(listener, app.into_make_service()).await?;
 
     Ok(())
 }
