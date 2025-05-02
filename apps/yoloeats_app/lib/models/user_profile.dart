@@ -10,12 +10,28 @@ enum RiskLevel {
   @HiveField(1)
   medium,
   @HiveField(2)
-  high,
+  high;
+
+  /// Converts enum to lowercase string for JSON/API communication.
+  String toJson() => name;
+
+  /// Creates enum from lowercase string (case-insensitive).
+  static RiskLevel fromJson(String? json) {
+    if (json == null) return RiskLevel.medium;
+    switch (json.toLowerCase()) {
+      case 'low':
+        return RiskLevel.low;
+      case 'high':
+        return RiskLevel.high;
+      case 'medium':
+      default:
+        return RiskLevel.medium;
+    }
+  }
 }
 
 @HiveType(typeId: 0)
-class UserProfile extends HiveObject
-    with EquatableMixin {
+class UserProfile extends HiveObject with EquatableMixin {
   @HiveField(0)
   final String? userId;
 
@@ -41,20 +57,45 @@ class UserProfile extends HiveObject
     List<String>? allergens,
     List<String>? dietaryPrefs,
     this.riskTolerance = RiskLevel.medium,
-  })
-      : allergens = allergens ?? [],
+  })  : allergens = allergens ?? [],
         dietaryPrefs = dietaryPrefs ?? [];
 
+  factory UserProfile.fromJson(Map<String, dynamic> json) {
+    return UserProfile(
+      userId: json['user_id'] as String?,
+      username: json['username'] as String?,
+      email: json['email'] as String?,
+      allergens: json['allergens'] == null
+          ? []
+          : List<String>.from(json['allergens'] as List),
+      dietaryPrefs: json['dietary_prefs'] == null
+          ? []
+          : List<String>.from(json['dietary_prefs'] as List),
+      riskTolerance: RiskLevel.fromJson(json['risk_tolerance'] as String?),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      if (userId != null) 'user_id': userId,
+      if (username != null) 'username': username,
+      if (email != null) 'email': email,
+      'allergens': allergens,
+      'dietary_prefs': dietaryPrefs,
+      'risk_tolerance': riskTolerance.toJson(),
+    };
+  }
+
+
   @override
-  List<Object?> get props =>
-      [
-        userId,
-        username,
-        email,
-        allergens,
-        dietaryPrefs,
-        riskTolerance,
-      ];
+  List<Object?> get props => [
+    userId,
+    username,
+    email,
+    allergens,
+    dietaryPrefs,
+    riskTolerance,
+  ];
 
   UserProfile copyWith({
     String? userId,
@@ -65,7 +106,6 @@ class UserProfile extends HiveObject
     RiskLevel? riskTolerance,
   }) {
     bool userIdChanged = userId != null && this.userId != userId;
-
     return UserProfile(
       userId: userIdChanged ? userId : (userId ?? this.userId),
       username: username ?? this.username,
