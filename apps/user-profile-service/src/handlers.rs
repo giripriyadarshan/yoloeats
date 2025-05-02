@@ -1,6 +1,6 @@
 use crate::{
     errors::{AppError, Result},
-    models::{UpdateProfilePayload, UserProfile},
+    models::{AllergenInfo, UpdateProfilePayload, UserProfile},
     state::AppState,
 };
 use axum::{Json, extract::State};
@@ -212,4 +212,38 @@ pub async fn update_profile(
             Err(AppError::MongoDb(e))
         }
     }
+}
+
+#[instrument]
+pub async fn get_allergens() -> Result<Json<Vec<AllergenInfo>>> {
+    info!("Fetching list of common allergens");
+
+    // TODO: Implement Redis caching for this list
+    // 1. Define cache key: e.g., "allergens:list"
+    // 2. Try fetching from Redis using state.redis_client
+    // 3. If cache hit (and data deserializes ok), return cached Json(data)
+    // 4. If cache miss or error: proceed to generate list below
+    // 5. After generating list, serialize it to JSON and store in Redis cache
+    //    using SETEX with a suitable TTL (e.g., 86400 seconds for 24 hours)
+    // 6. Return Ok(Json(allergen_list))
+
+    // Hardcoded list based on EU 14 major allergens
+    let allergens = vec![
+        AllergenInfo { id: "gluten".to_string(), name: "Cereals containing gluten".to_string(), description: Some("Includes wheat (such as spelt and khorasan wheat), rye, barley, oats.".to_string()) },
+        AllergenInfo { id: "crustaceans".to_string(), name: "Crustaceans".to_string(), description: Some("Includes crabs, lobsters, prawns, scampi.".to_string()) },
+        AllergenInfo { id: "eggs".to_string(), name: "Eggs".to_string(), description: None },
+        AllergenInfo { id: "fish".to_string(), name: "Fish".to_string(), description: None },
+        AllergenInfo { id: "peanuts".to_string(), name: "Peanuts".to_string(), description: None },
+        AllergenInfo { id: "soybeans".to_string(), name: "Soybeans".to_string(), description: None },
+        AllergenInfo { id: "milk".to_string(), name: "Milk".to_string(), description: Some("Including lactose.".to_string()) },
+        AllergenInfo { id: "nuts".to_string(), name: "Nuts".to_string(), description: Some("Includes almonds, hazelnuts, walnuts, cashews, pecans, brazils, pistachios, macadamia nuts.".to_string()) },
+        AllergenInfo { id: "celery".to_string(), name: "Celery".to_string(), description: None },
+        AllergenInfo { id: "mustard".to_string(), name: "Mustard".to_string(), description: None },
+        AllergenInfo { id: "sesame".to_string(), name: "Sesame seeds".to_string(), description: None },
+        AllergenInfo { id: "sulphites".to_string(), name: "Sulphur dioxide and sulphites".to_string(), description: Some("At concentrations of more than 10mg/kg or 10mg/litre.".to_string()) },
+        AllergenInfo { id: "lupin".to_string(), name: "Lupin".to_string(), description: None },
+        AllergenInfo { id: "molluscs".to_string(), name: "Molluscs".to_string(), description: Some("Includes mussels, oysters, squid, snails.".to_string()) },
+    ];
+
+    Ok(Json(allergens))
 }

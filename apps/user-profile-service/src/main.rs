@@ -1,5 +1,5 @@
 use axum::{Router, routing::get};
-use handlers::{get_profile, update_profile};
+use handlers::{get_allergens, get_profile, update_profile};
 use rust_database_clients::{create_mongo_client, create_redis_client, load_config};
 use state::AppState;
 use std::{env, net::SocketAddr, sync::Arc};
@@ -57,10 +57,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .allow_headers(Any);
 
     let profile_routes = Router::new().route("/", get(get_profile).put(update_profile));
+    let allergen_routes = Router::new().route("/", get(get_allergens));
 
     let app = Router::new()
         .route("/", get(root_handler))
         .nest("/api/v1/profile", profile_routes)
+        .nest("/api/v1/allergens", allergen_routes)
         .layer(cors)
         .with_state(app_state);
 

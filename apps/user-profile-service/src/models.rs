@@ -60,3 +60,10 @@ pub struct UpdateProfilePayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk_tolerance: Option<RiskLevel>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AllergenInfo {
+    pub id: String,                  // Simple identifier (e.g., "gluten", "milk")
+    pub name: String,                // User-friendly name
+    pub description: Option<String>, // Optional longer description
+}
