@@ -10,6 +10,7 @@ use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod errors;
+mod handlers;
 mod models;
 mod state;
 
