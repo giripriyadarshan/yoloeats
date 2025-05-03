@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
+import 'models/allergen_info.dart';
 import 'models/user_profile.dart';
 
 const String userProfileBoxName = 'userProfileBox';
+const String allergenListBoxName = 'allergenListBox';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,8 +17,10 @@ Future<void> main() async {
 
   Hive.registerAdapter(RiskLevelAdapter());
   Hive.registerAdapter(UserProfileAdapter());
+  Hive.registerAdapter(AllergenInfoAdapter());
 
   await Hive.openBox<UserProfile>(userProfileBoxName);
+  await Hive.openBox<List>(allergenListBoxName);
 
   runApp(
     const ProviderScope(

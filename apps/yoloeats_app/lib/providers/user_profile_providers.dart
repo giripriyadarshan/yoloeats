@@ -1,32 +1,23 @@
-// File: lib/providers/user_profile_providers.dart
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import '../models/user_profile.dart';
 import '../data/local/user_profile_local_data_source.dart';
-import '../data/remote/user_profile_api_service.dart'; // Import API Service
 import '../data/repositories/user_profile_repository.dart';
-import 'api_service_providers.dart'; // Import API Service Provider file
+import 'api_service_providers.dart';
+import '../models/allergen_info.dart';
 
-// Provider for the Local Data Source (remains the same)
 final userProfileLocalDataSourceProvider = Provider<UserProfileLocalDataSource>(
       (ref) => UserProfileLocalDataSource(),
 );
 
-// Provider for the Repository Implementation (UPDATED)
-// Now depends on both local data source and API service providers
 final userProfileRepositoryProvider = Provider<UserProfileRepository>(
       (ref) {
     final localDataSource = ref.watch(userProfileLocalDataSourceProvider);
-    // --- FIX: Watch and inject the API service provider ---
     final apiService = ref.watch(userProfileApiServiceProvider);
-    return UserProfileRepositoryImpl(localDataSource, apiService); // Pass both
+    return UserProfileRepositoryImpl(localDataSource, apiService);
   },
 );
 
 
-// --- State Notifier for User Profile State (remains the same) ---
-// (No changes needed here as it depends on the Repository abstraction)
 class UserProfileNotifier extends StateNotifier<AsyncValue<UserProfile?>> {
   final UserProfileRepository _repository;
 
@@ -47,14 +38,13 @@ class UserProfileNotifier extends StateNotifier<AsyncValue<UserProfile?>> {
 
   Future<void> saveProfile(UserProfile profile) async {
     final previousState = state;
-    state = AsyncValue.data(profile); // Optimistic update
+    state = AsyncValue.data(profile);
 
     try {
-      // Repository now handles local save + async remote sync attempt
       await _repository.saveUserProfile(profile);
     } catch (e, s) {
       print('Error saving profile (propagated from repository): $e');
-      state = previousState; // Revert on error (likely local save failure)
+      state = previousState;
     }
   }
 
@@ -62,7 +52,7 @@ class UserProfileNotifier extends StateNotifier<AsyncValue<UserProfile?>> {
     final previousState = state;
     state = const AsyncValue.loading();
     try {
-      await _repository.deleteUserProfile(); // Call repo method
+      await _repository.deleteUserProfile();
       state = const AsyncValue.data(null);
     } catch (e, s) {
       print('Error deleting profile: $e');
@@ -75,9 +65,13 @@ class UserProfileNotifier extends StateNotifier<AsyncValue<UserProfile?>> {
   }
 }
 
-// --- StateNotifierProvider (remains the same) ---
 final userProfileProvider =
 StateNotifierProvider<UserProfileNotifier, AsyncValue<UserProfile?>>((ref) {
   final repository = ref.watch(userProfileRepositoryProvider);
   return UserProfileNotifier(repository);
+});
+
+final allergensProvider = FutureProvider<List<AllergenInfo>>((ref) async {
+  final repository = ref.watch(userProfileRepositoryProvider);
+  return repository.getAllergens();
 });

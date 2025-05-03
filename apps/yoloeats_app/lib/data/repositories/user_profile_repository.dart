@@ -1,4 +1,5 @@
 import '../../models/user_profile.dart';
+import '../../models/allergen_info.dart';
 import '../local/user_profile_local_data_source.dart';
 import '../remote/user_profile_api_service.dart';
 
@@ -6,6 +7,7 @@ abstract class UserProfileRepository {
   Future<UserProfile?> getUserProfile();
   Future<void> saveUserProfile(UserProfile profile);
   Future<void> deleteUserProfile();
+  Future<List<AllergenInfo>> getAllergens();
 }
 
 class UserProfileRepositoryImpl implements UserProfileRepository {
@@ -100,6 +102,46 @@ class UserProfileRepositoryImpl implements UserProfileRepository {
     } catch (e) {
       print("Repository: Error deleting profile locally: $e");
       rethrow;
+    }
+  }
+
+  @override
+  Future<List<AllergenInfo>> getAllergens() async {
+    print("Repository: Getting allergens...");
+    try {
+      // 1. Try local cache first
+      final localAllergens = _localDataSource.getAllergens();
+      if (localAllergens.isNotEmpty) {
+        print("Repository: Allergens loaded from Hive cache.");
+        // TODO: Add staleness check? Fetch in background?
+        return localAllergens;
+      }
+
+      // 2. If no local data, fetch from API
+      print("Repository: No local allergens found, fetching from API...");
+      final apiAllergens = await _apiService.fetchAllergens();
+
+      // 3. Save API result to local cache (fire and forget is ok here)
+      if (apiAllergens.isNotEmpty) {
+        print("Repository: Allergens fetched from API, saving to Hive.");
+        _localDataSource.saveAllergens(apiAllergens).catchError((e) {
+          print("Repository: Error saving allergens locally after API fetch: $e");
+        });
+      }
+      return apiAllergens;
+
+    } catch (e) {
+      print("Repository: Error in getAllergens: $e");
+      try {
+        final localAllergens = _localDataSource.getAllergens();
+        if (localAllergens.isNotEmpty) {
+          print("Repository: API failed, returning potentially stale allergens from Hive.");
+          return localAllergens;
+        }
+      } catch (localError) {
+        print("Repository: Error fetching local allergens during API fallback: $localError");
+      }
+      return [];
     }
   }
 }

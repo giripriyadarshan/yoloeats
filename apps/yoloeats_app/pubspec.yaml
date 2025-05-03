@@ -45,6 +45,8 @@ dependencies:
   permission_handler: ^12.0.0+1
   dio: ^5.8.0+1
   equatable: ^2.0.7
+  image: ^4.5.4
+  collection: ^1.19.1
 
 dev_dependencies:
   flutter_test:
@@ -69,6 +71,9 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+  assets:
+    - assets/yoloeats_v1.tflite # Adjust filename if needed
+    - assets/labels.txt
 
   # To add assets to your application, add an assets section, like this:
   # assets:
