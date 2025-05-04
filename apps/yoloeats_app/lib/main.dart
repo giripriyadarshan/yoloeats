@@ -4,9 +4,11 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'models/allergen_info.dart';
 import 'models/user_profile.dart';
+import 'models/product_info.dart';
 
 const String userProfileBoxName = 'userProfileBox';
 const String allergenListBoxName = 'allergenListBox';
+const String productCacheBoxName = 'productCacheBox';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,9 +20,11 @@ Future<void> main() async {
   Hive.registerAdapter(RiskLevelAdapter());
   Hive.registerAdapter(UserProfileAdapter());
   Hive.registerAdapter(AllergenInfoAdapter());
+  Hive.registerAdapter(ProductInfoAdapter());
 
   await Hive.openBox<UserProfile>(userProfileBoxName);
   await Hive.openBox<List>(allergenListBoxName);
+  await Hive.openBox<ProductInfo>(productCacheBoxName);
 
   runApp(
     const ProviderScope(

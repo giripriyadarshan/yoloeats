@@ -2,44 +2,46 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'dart:io' show Platform;
-
 import '../data/remote/user_profile_api_service.dart';
+import '../data/remote/allergy_checker_api_service.dart';
+
 
 final dioProvider = Provider<Dio>((ref) {
-  // TODO: Move base URL to configuration/environment variables
-  String baseUrl;
+  String userProfileBaseUrl;
+  String allergyCheckerBaseUrl;
+  // TODO: Move base URLs to config/env
   const String userProfilePort = "8001";
+  const String allergyCheckerPort = "8003";
+  const String apiPrefix = "/api/v1";
 
   if (!kIsWeb && Platform.isAndroid) {
-    // Android Emulator typically uses 10.0.2.2 to reach host machine's localhost
-    baseUrl = 'http://10.0.2.2:$userProfilePort/api/v1';
+    const ip = 'http://10.0.2.2';
+    userProfileBaseUrl = '$ip:$userProfilePort$apiPrefix';
+    allergyCheckerBaseUrl = '$ip:$allergyCheckerPort$apiPrefix';
   } else {
-    // iOS Simulator, Desktop, Web usually use localhost or 127.0.0.1
-    baseUrl = 'http://localhost:$userProfilePort/api/v1';
+    const ip = 'http://localhost';
+    userProfileBaseUrl = '$ip:$userProfilePort$apiPrefix';
+    allergyCheckerBaseUrl = '$ip:$allergyCheckerPort$apiPrefix';
   }
 
   final options = BaseOptions(
-    baseUrl: baseUrl,
+    baseUrl: allergyCheckerBaseUrl,
     connectTimeout: const Duration(seconds: 5),
     receiveTimeout: const Duration(seconds: 5),
   );
   final dio = Dio(options);
 
-
-  if (kDebugMode) { // Only add in debug mode
+  if (kDebugMode) {
     dio.interceptors.add(LogInterceptor(
-      requestHeader: true,
-      requestBody: true,
-      responseHeader: true,
-      responseBody: true,
-      error: true,
-    ));
+        requestHeader: true, requestBody: true, responseHeader: false, responseBody: true));
   }
-
   return dio;
 });
 
 final userProfileApiServiceProvider = Provider<UserProfileApiService>((ref) {
-  final dio = ref.watch(dioProvider);
-  return UserProfileApiService(dio);
+  return UserProfileApiService(ref.watch(dioProvider));
+});
+
+final allergyCheckerApiServiceProvider = Provider<AllergyCheckerApiService>((ref) {
+  return AllergyCheckerApiService(ref.watch(dioProvider));
 });
