@@ -109,7 +109,18 @@ pub async fn check_product_safety(
     debug!("Querying Neo4j for conflicts...");
     let user_allergens: Vec<String> = user_profile.allergens.into_iter().collect();
     let user_diets: Vec<String> = user_profile.dietary_prefs.into_iter().collect();
-    let cypher_query = query(r#" /* ... Cypher query ... */ "#)
+    let cypher_query = query(r#"
+        MATCH (i:Ingredient)
+        WHERE i.name IN $ingredients
+        OPTIONAL MATCH (i)-[:CONTAINS]->(a:Allergen)
+        WHERE a.name IN $userAllergens
+        OPTIONAL MATCH (i)-[:CONTAINS]->(d:DietaryRestriction)
+        WHERE d.name IN $userDiets
+        RETURN 
+            COLLECT(DISTINCT a.name) AS conflictingAllergens,
+            COLLECT(DISTINCT i.name) AS traceAllergens,
+            COLLECT(DISTINCT d.name) AS conflictingDiets
+    "#)
         .param("ingredients", all_potential_ingredients)
         .param("userAllergens", user_allergens)
         .param("userDiets", user_diets);
