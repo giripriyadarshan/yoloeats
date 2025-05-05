@@ -2,44 +2,57 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'dart:io' show Platform;
-
 import '../data/remote/user_profile_api_service.dart';
+import '../data/remote/allergy_checker_api_service.dart';
+import '../data/remote/product_api_service.dart';
 
-final dioProvider = Provider<Dio>((ref) {
-  // TODO: Move base URL to configuration/environment variables
-  String baseUrl;
-  const String userProfilePort = "8001";
+// --- Configuration (TODO: Move to separate config/env file) ---
+const String _userProfilePort = "8001";
+const String _productCatalogPort = "8002";
+const String _allergyCheckerPort = "8003";
+const String _apiPrefix = "/api/v1";
 
+String _getBaseUrl(String port) {
   if (!kIsWeb && Platform.isAndroid) {
-    // Android Emulator typically uses 10.0.2.2 to reach host machine's localhost
-    baseUrl = 'http://10.0.2.2:$userProfilePort/api/v1';
+    return 'http://10.0.2.2:$port$_apiPrefix';
   } else {
-    // iOS Simulator, Desktop, Web usually use localhost or 127.0.0.1
-    baseUrl = 'http://localhost:$userProfilePort/api/v1';
+    return 'http://localhost:$port$_apiPrefix';
   }
-
-  final options = BaseOptions(
-    baseUrl: baseUrl,
-    connectTimeout: const Duration(seconds: 5),
-    receiveTimeout: const Duration(seconds: 5),
-  );
-  final dio = Dio(options);
+}
 
 
-  if (kDebugMode) { // Only add in debug mode
-    dio.interceptors.add(LogInterceptor(
-      requestHeader: true,
-      requestBody: true,
-      responseHeader: true,
-      responseBody: true,
-      error: true,
-    ));
-  }
+BaseOptions _createBaseOptions(String port) => BaseOptions(
+  baseUrl: _getBaseUrl(port),
+  connectTimeout: const Duration(seconds: 8),
+  receiveTimeout: const Duration(seconds: 8),
+);
 
+final _userProfileDioProvider = Provider<Dio>((ref) {
+  final dio = Dio(_createBaseOptions(_userProfilePort));
+  if (kDebugMode) dio.interceptors.add(LogInterceptor(responseBody: true));
+  return dio;
+});
+
+final _productApiDioProvider = Provider<Dio>((ref) {
+  final dio = Dio(_createBaseOptions(_productCatalogPort));
+  if (kDebugMode) dio.interceptors.add(LogInterceptor(responseBody: true));
+  return dio;
+});
+
+final _allergyCheckerDioProvider = Provider<Dio>((ref) {
+  final dio = Dio(_createBaseOptions(_allergyCheckerPort));
+  if (kDebugMode) dio.interceptors.add(LogInterceptor(responseBody: true));
   return dio;
 });
 
 final userProfileApiServiceProvider = Provider<UserProfileApiService>((ref) {
-  final dio = ref.watch(dioProvider);
-  return UserProfileApiService(dio);
+  return UserProfileApiService(ref.watch(_userProfileDioProvider));
+});
+
+final allergyCheckerApiServiceProvider = Provider<AllergyCheckerApiService>((ref) {
+  return AllergyCheckerApiService(ref.watch(_allergyCheckerDioProvider));
+});
+
+final productApiServiceProvider = Provider<ProductApiService>((ref) {
+  return ProductApiService(ref.watch(_productApiDioProvider));
 });

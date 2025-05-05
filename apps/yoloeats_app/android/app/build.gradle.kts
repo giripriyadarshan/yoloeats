@@ -42,3 +42,15 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // Add this line for Latin script text recognition
+    // Replace '16.0.0' with the latest stable version found on Google/ML Kit docs
+    implementation("com.google.mlkit:text-recognition:16.0.0")
+
+    // Add other language models if needed, e.g.:
+    // implementation("com.google.mlkit:text-recognition-chinese:16.0.0")
+
+    // Add other standard Flutter dependencies if needed, e.g.:
+    // implementation(kotlin("stdlib-jdk8")) // Often added automatically
+}
