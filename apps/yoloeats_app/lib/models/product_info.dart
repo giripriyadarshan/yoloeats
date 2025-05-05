@@ -1,5 +1,6 @@
 import 'package:hive/hive.dart';
 import 'package:equatable/equatable.dart';
+import 'product.dart';
 
 part 'product_info.g.dart';
 
@@ -30,6 +31,23 @@ class ProductInfo extends HiveObject with EquatableMixin {
         explicitAllergens = explicitAllergens ?? [],
         dietaryFlags = dietaryFlags ?? [];
 
+  factory ProductInfo.fromProduct(Product product) {
+    final parsedIngredients = product.ingredientsText
+        ?.split(',')
+        .map((e) => e.trim().toLowerCase())
+        .where((e) => e.isNotEmpty)
+        .toList() ??
+        [];
+
+    return ProductInfo(
+      barcode: product.code,
+      name: product.productName,
+      ingredients: parsedIngredients,
+      explicitAllergens: product.tracesTags,
+      dietaryFlags: product.labelsTags,
+    );
+  }
+
   @override
   List<Object?> get props => [
     barcode,
@@ -38,4 +56,7 @@ class ProductInfo extends HiveObject with EquatableMixin {
     explicitAllergens,
     dietaryFlags,
   ];
+
+  @override
+  bool? get stringify => true;
 }

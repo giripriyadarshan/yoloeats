@@ -48,7 +48,7 @@ class AllergyRepositoryImpl implements AllergyRepository {
       if (isNetworkError) {
         print("Repository: Online check failed due to network error ($e). Attempting offline check.");
         final userProfile = _userProfileLocalDataSource.getUserProfile();
-        final productInfo = await _productLocalDataSource.getProductInfo(productIdentifier);
+        final productInfo = await _productLocalDataSource.getCachedProductInfo(productIdentifier);
 
         if (userProfile != null && productInfo != null) {
           print("Repository: Found local data for offline check.");

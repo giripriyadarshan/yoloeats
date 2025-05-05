@@ -1,38 +1,70 @@
 import 'package:hive_flutter/hive_flutter.dart';
 import '../../models/product_info.dart';
 import '../../main.dart';
+import '../../models/product.dart';
+import '../../main.dart' show productCacheBoxName, productDetailBoxName;
 
 class ProductLocalDataSource {
-  /// Retrieves cached ProductInfo using the barcode as the key.
-  /// Returns null if not found.
-  Future<ProductInfo?> getProductInfo(String barcode) async {
+  Future<ProductInfo?> getCachedProductInfo(String barcode) async {
     try {
       final box = await Hive.openBox<ProductInfo>(productCacheBoxName);
       return box.get(barcode);
     } catch (e) {
-      print('Error getting product info for barcode $barcode from Hive: $e');
+      print('Error getting ProductInfo for $barcode from Hive: $e');
       return null;
     }
   }
 
-  /// Saves ProductInfo to the cache using its barcode as the key.
-  Future<void> saveProductInfo(ProductInfo product) async {
+  Future<void> saveCachedProductInfo(ProductInfo productInfo) async {
     try {
       final box = await Hive.openBox<ProductInfo>(productCacheBoxName);
-      await box.put(product.barcode, product);
+      await box.put(productInfo.barcode, productInfo);
     } catch (e) {
-      print('Error saving product info for barcode ${product.barcode} to Hive: $e');
+      print('Error saving ProductInfo for ${productInfo.barcode} to Hive: $e');
     }
   }
 
-  /// Clears the entire product cache box.
-  Future<void> clearProductCache() async {
+  Future<void> clearProductInfoCache() async {
     try {
       final box = await Hive.openBox<ProductInfo>(productCacheBoxName);
       await box.clear();
       print('Product cache cleared.');
     } catch (e) {
       print('Error clearing product cache: $e');
+    }
+  }
+
+  Future<Product?> getProductDetail(String barcode) async {
+    try {
+      final box = await Hive.openBox<Product>(productDetailBoxName);
+      return box.get(barcode);
+    } catch (e) {
+      print('Error getting Product detail for $barcode from Hive: $e');
+      return null;
+    }
+  }
+
+  Future<void> saveProductDetail(Product product) async {
+    if (product.code.isEmpty) {
+      print('Error: Cannot save product detail to cache without a barcode.');
+      return;
+    }
+    try {
+      final box = await Hive.openBox<Product>(productDetailBoxName);
+      await box.put(product.code, product); // Use barcode as key
+      print('Saved full product detail for ${product.code} to cache.');
+    } catch (e) {
+      print('Error saving Product detail for ${product.code} to Hive: $e');
+    }
+  }
+
+  Future<void> clearProductDetailCache() async {
+    try {
+      final box = await Hive.openBox<Product>(productDetailBoxName);
+      await box.clear();
+      print('Product detail cache cleared.');
+    } catch (e) {
+      print('Error clearing product detail cache: $e');
     }
   }
 }
