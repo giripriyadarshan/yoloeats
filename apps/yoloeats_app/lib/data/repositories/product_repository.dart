@@ -8,8 +8,11 @@ abstract class ProductRepository {
   /// Identifier is typically the barcode.
   Future<Product?> getProduct(String identifier);
 
-  /// Searches products via API.
-  Future<List<Product>> searchProducts(Map<String, dynamic> queryParams);
+  /// Searches products via API based on provided query parameters.
+  Future<List<Product>> searchProducts({required Map<String, dynamic> queryParams});
+
+  /// Fetches personalized product recommendations based on a product ID.
+  Future<List<Product>> getRecommendations({required String productId});
 }
 
 class ProductRepositoryImpl implements ProductRepository {
@@ -22,7 +25,7 @@ class ProductRepositoryImpl implements ProductRepository {
   Future<Product?> getProduct(String identifier) async {
     // TODO: Add robust check if identifier is barcode vs internal ID
     final String barcode = identifier;
-    print("Repository: Getting product detail for: $barcode");
+    print("Repository: Getting product detail for identifier: $identifier (using as barcode: $barcode)");
 
     try {
       final localProduct = await _localDataSource.getProductDetail(barcode);
@@ -55,31 +58,42 @@ class ProductRepositoryImpl implements ProductRepository {
         return null;
       }
     } catch (e) {
-      print("Repository: Error in getProduct for $barcode: $e");
+      print("Repository: Error in getProduct for $identifier: $e");
       try {
         final localProduct = await _localDataSource.getProductDetail(barcode);
         if (localProduct != null) {
-          print("Repository: API failed for $barcode, returning potentially stale detail from Hive.");
+          print("Repository: API failed for $identifier, returning potentially stale detail from Hive.");
           return localProduct;
         }
       } catch (localError) {
-        print("Repository: Error fetching local detail during API fallback for $barcode: $localError");
+        print("Repository: Error fetching local detail during API fallback for $identifier: $localError");
       }
-      return null;
+      rethrow;
     }
   }
 
   @override
-  Future<List<Product>> searchProducts(Map<String, dynamic> queryParams) async {
+  Future<List<Product>> searchProducts({required Map<String, dynamic> queryParams}) async {
     print("Repository: Searching products with params: $queryParams");
     try {
-      final results = await _apiService.searchProducts(queryParams);
-      // TODO: Potentially cache search results? Complex state to manage.
-      // TODO: Potentially save individual products from search results to cache?
+      final results = await _apiService.searchProducts(queryParams: queryParams);
+      // TODO: Potentially cache search results or individual products from results?
+      print("Repository: Search returned ${results.length} products.");
       return results;
     } catch (e) {
       print("Repository: Error in searchProducts: $e");
-      return [];
+      rethrow;
+    }
+  }
+
+  @override
+  Future<List<Product>> getRecommendations({required String productId}) async {
+    print("Repository: Fetching recommendations for product $productId");
+    try {
+      return await _apiService.getRecommendations(productId: productId);
+    } catch (e) {
+      print("Repository: Error fetching recommendations for $productId: $e");
+      rethrow;
     }
   }
 }
