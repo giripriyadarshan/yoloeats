@@ -20,10 +20,26 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
 
+use qdrant_client::qdrant::{
+    Condition, FieldCondition, Filter, GetPointsBuilder, HasIdCondition, Match, PointId,
+    RepeatedStrings, SearchPoints, WithPayloadSelector, condition::ConditionOneOf,
+    r#match::MatchValue, value::Kind, vectors_output,
+};
+use reqwest::StatusCode as HttpStatus;
+
+use serde::Deserialize;
+
 const CACHE_EXPIRATION_SECONDS: u64 = 300;
 const DEFAULT_SEARCH_LIMIT: u64 = 20;
 const MAX_SEARCH_LIMIT: u64 = 100;
 
+#[derive(Deserialize, Debug, Default)]
+struct UserProfileResponse {
+    #[serde(default)]
+    allergens: Vec<String>,
+    #[serde(default, rename = "dietaryPrefs")]
+    dietary_prefs: Vec<String>,
+}
 fn product_id_cache_key(id: &ObjectId) -> String {
     format!("product:id:{}", id)
 }
@@ -599,4 +615,256 @@ pub async fn delete_product(
             object_id
         )))
     }
+}
+
+#[instrument(skip(state), fields(product_id = %product_id_str))]
+pub async fn get_recommendations(
+    State(state): State<Arc<AppState>>,
+    Path(product_id_str): Path<String>,
+    // TODO: Extract actual user_id from auth context (e.g., headers, token claims)
+) -> Result<Json<Vec<Product>>> {
+    info!(
+        "Received recommendation request for product ID: {}",
+        product_id_str
+    );
+
+    const DUMMY_USER_ID: &str = "dummy-user-123"; // Replace later
+    warn!(
+        user_id = DUMMY_USER_ID,
+        "Using DUMMY user ID for profile fetch"
+    );
+    let profile_url = format!("{}/api/v1/profile", state.user_profile_service_url);
+    debug!("Fetching user profile from: {}", profile_url);
+
+    let profile_resp = state
+        .http_client
+        .get(&profile_url)
+        .send()
+        .await
+        .map_err(ServiceError::Reqwest)?;
+
+    let (user_allergens, user_diets) = match profile_resp.status() {
+        HttpStatus::OK => {
+            let profile = profile_resp
+                .json::<UserProfileResponse>()
+                .await
+                .map_err(|e| {
+                    error!("Failed to deserialize user profile JSON: {}", e);
+                    ServiceError::Internal(format!("Failed to parse profile data: {}", e))
+                })?;
+            debug!(allergens = ?profile.allergens, diets = ?profile.dietary_prefs, "User profile fetched successfully");
+            (profile.allergens, profile.dietary_prefs)
+        }
+        HttpStatus::NOT_FOUND => {
+            warn!(
+                user_id = DUMMY_USER_ID,
+                "User profile not found. Proceeding without personalization."
+            );
+            (Vec::new(), Vec::new())
+        }
+        status => {
+            let error_body = profile_resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "Failed to read error body".to_string());
+            error!(%status, body = %error_body, "User profile service failed");
+            return Err(ServiceError::Internal(format!(
+                "User profile service failed with status {}",
+                status
+            )));
+        }
+    };
+
+    let target_point_id: PointId = product_id_str.clone().into();
+    let get_request =
+        GetPointsBuilder::new("product_vectors".to_string(), vec![target_point_id.clone()])
+            .with_payload(false)
+            .with_vectors(true);
+
+    debug!("Fetching target vector for point ID: {:?}", target_point_id);
+    let retrieve_result = state.qdrant_client.get_points(get_request).await?;
+
+    let target_vector = retrieve_result
+        .result
+        .into_iter()
+        .next()
+        .and_then(|point| point.vectors)
+        .and_then(|vectors| vectors.vectors_options)
+        .and_then(|options| match options {
+            vectors_output::VectorsOptions::Vector(v) => Some(v.data),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            error!(
+                "Target product vector not found in Qdrant for ID: {}",
+                product_id_str
+            );
+            ServiceError::NotFound(format!(
+                "Vector data not found for product {}",
+                product_id_str
+            ))
+        })?;
+
+    if target_vector.is_empty() {
+        error!(
+            "Retrieved empty target vector for product ID: {}",
+            product_id_str
+        );
+        return Err(ServiceError::Internal(format!(
+            "Empty vector found for product {}",
+            product_id_str
+        )));
+    }
+    debug!(
+        "Target vector retrieved successfully (size: {})",
+        target_vector.len()
+    );
+
+    let mut must_not_conditions: Vec<Condition> = Vec::new();
+
+    if !user_allergens.is_empty() {
+        debug!("Adding Qdrant filter for allergens: {:?}", user_allergens);
+        let allergen_keywords: Vec<String> = user_allergens.into_iter().collect();
+        must_not_conditions.push(Condition {
+            condition_one_of: Some(ConditionOneOf::Field(FieldCondition {
+                key: "allergen_labels".to_string(),
+                r#match: Some(Match {
+                    match_value: Some(MatchValue::Keywords(RepeatedStrings {
+                        strings: allergen_keywords,
+                    })),
+                }),
+                ..Default::default()
+            })),
+        });
+    }
+
+    if !user_diets.is_empty() {
+        let user_diets_set: HashSet<&str> = user_diets.iter().map(String::as_str).collect();
+        let mut conflicting_tags: Vec<String> = Vec::new();
+        if user_diets_set.contains("vegan") {
+            conflicting_tags.extend(
+                vec!["en:non-vegan", "en:contains-milk"]
+                    .into_iter()
+                    .map(String::from),
+            );
+        } else if user_diets_set.contains("vegetarian") {
+            conflicting_tags.extend(
+                vec!["en:non-vegetarian", "en:contains-meat"]
+                    .into_iter()
+                    .map(String::from),
+            );
+        }
+        conflicting_tags.sort();
+        conflicting_tags.dedup();
+
+        if !conflicting_tags.is_empty() {
+            debug!(
+                "Adding Qdrant filter for diet conflicts: {:?}",
+                conflicting_tags
+            );
+            must_not_conditions.push(Condition {
+                condition_one_of: Some(ConditionOneOf::Field(FieldCondition {
+                    key: "diet_labels".to_string(),
+                    r#match: Some(Match {
+                        match_value: Some(MatchValue::Keywords(RepeatedStrings {
+                            strings: conflicting_tags,
+                        })),
+                    }),
+                    ..Default::default()
+                })),
+            });
+        }
+    }
+
+    must_not_conditions.push(Condition {
+        condition_one_of: Some(ConditionOneOf::HasId(HasIdCondition {
+            has_id: vec![target_point_id],
+        })),
+    });
+
+    let qdrant_filter = Filter {
+        must: vec![],
+        must_not: must_not_conditions,
+        should: vec![],
+        min_should: None,
+    };
+    debug!("Constructed Qdrant filter: {:?}", qdrant_filter);
+
+    let search_request = SearchPoints {
+        collection_name: "product_vectors".into(),
+        vector: target_vector,
+        filter: Some(qdrant_filter),
+        limit: 20,
+        offset: Some(0),
+        with_payload: Some(WithPayloadSelector {
+            selector_options: Some(
+                qdrant_client::qdrant::with_payload_selector::SelectorOptions::Enable(true),
+            ),
+        }),
+        with_vectors: None,
+        score_threshold: None,
+        params: None,
+        vector_name: None,
+        read_consistency: None,
+        timeout: None,
+        shard_key_selector: None,
+        sparse_indices: None,
+    };
+
+    info!("Performing Qdrant similarity search...");
+    let search_result = state.qdrant_client.search_points(search_request).await?;
+    debug!(
+        "Qdrant search returned {} results",
+        search_result.result.len()
+    );
+
+    let mut candidate_mongo_ids: Vec<ObjectId> = Vec::new();
+    for scored_point in search_result.result {
+        if let Some(payload) = scored_point.payload.get("mongo_id") {
+            if let Some(Kind::StringValue(id_str)) = &payload.kind {
+                if let Ok(oid) = ObjectId::parse_str(id_str) {
+                    if id_str != &product_id_str {
+                        candidate_mongo_ids.push(oid);
+                    }
+                } else {
+                    warn!("Failed to parse ObjectId from Qdrant payload: {}", id_str);
+                }
+            } else {
+                warn!(
+                    "Qdrant payload field 'mongo_id' was not a StringValue for point ID: {:?}",
+                    scored_point.id
+                );
+            }
+        } else {
+            warn!(
+                "Qdrant point ID {:?} missing 'mongo_id' in payload",
+                scored_point.id
+            );
+        }
+    }
+
+    if candidate_mongo_ids.is_empty() {
+        info!("No suitable candidates found after Qdrant search and filtering.");
+        return Ok(Json(vec![]));
+    }
+    debug!("Candidate Mongo IDs from Qdrant: {:?}", candidate_mongo_ids);
+
+    const FINAL_RECOMMENDATION_LIMIT: usize = 10;
+    candidate_mongo_ids.truncate(FINAL_RECOMMENDATION_LIMIT);
+
+    info!(
+        "Fetching details for top {} candidates from MongoDB",
+        candidate_mongo_ids.len()
+    );
+    let mongo_filter = doc! { "_id": { "$in": candidate_mongo_ids } };
+    let collection = state.mongo_db.collection::<Product>("products");
+
+    let cursor = collection.find(mongo_filter).await?;
+    let recommended_products: Vec<Product> = cursor.try_collect().await?;
+
+    info!(
+        "Returning {} recommended products.",
+        recommended_products.len()
+    );
+    Ok(Json(recommended_products))
 }

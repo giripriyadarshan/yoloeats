@@ -1,13 +1,18 @@
+use crate::handlers::{
+    create_product, delete_product, get_product_by_barcode, get_product_by_id, get_recommendations,
+    search_products, update_product,
+};
 use axum::{
     Router,
     routing::{get, post},
 };
 use dotenvy::dotenv;
+use errors::{Result, ServiceError};
 use neo4rs::Graph as Neo4jClient;
-use qdrant_client::Qdrant;
-use qdrant_client::config::QdrantConfig;
+use qdrant_client::{Qdrant, config::QdrantConfig};
 use reqwest::Client as HttpClient;
 use rust_database_clients::{create_mongo_client, create_redis_client, load_config};
+use state::AppState;
 use std::{env, net::SocketAddr, sync::Arc};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, error, info, warn};
@@ -18,14 +23,6 @@ mod errors;
 mod handlers;
 mod models;
 mod state;
-
-use errors::{Result, ServiceError};
-use state::AppState;
-
-use crate::handlers::{
-    create_product, delete_product, get_product_by_barcode, get_product_by_id, search_products,
-    update_product,
-};
 
 async fn health_check() -> &'static str {
     "Product Catalog Service OK"
@@ -117,7 +114,8 @@ async fn main() -> Result<()> {
                 .put(update_product)
                 .delete(delete_product),
         )
-        .route("/barcode/:code", get(get_product_by_barcode));
+        .route("/barcode/:code", get(get_product_by_barcode))
+        .route("/:id/recommendations", get(get_recommendations));
 
     let app = Router::new()
         .nest("/api/v1/products", api_routes)
