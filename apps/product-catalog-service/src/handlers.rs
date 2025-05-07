@@ -1,23 +1,22 @@
-use crate::models::{CreateProductPayload, UpdateProductPayload};
 use crate::{
     errors::{Result, ServiceError},
-    models::{Product, SearchParams},
+    models::{CreateProductPayload, Product, SearchParams, UpdateProductPayload},
     state::AppState,
 };
-use axum::http::StatusCode;
 use axum::{
     Json,
     extract::{Path, Query, State},
+    http::StatusCode,
 };
 use bson::{doc, oid::ObjectId};
 use chrono::Utc;
 use futures::stream::TryStreamExt;
-use mongodb::options::FindOptions;
 use mongodb::{
     error::ErrorKind,
-    options::{FindOneAndUpdateOptions, ReturnDocument},
+    options::{FindOneAndUpdateOptions, FindOptions, ReturnDocument},
 };
 use redis::AsyncCommands;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -238,8 +237,62 @@ pub async fn search_products(
         }
     }
 
-    debug!("Constructed MongoDB filter: {:?}", filter);
+    if let Some(user_allergens) = &params.user_allergens {
+        if !user_allergens.is_empty() {
+            info!("Applying allergen filter (excluding): {:?}", user_allergens);
+            filter.insert("allergens_tags", doc! { "$nin": user_allergens });
+        }
+    }
 
+    if let Some(user_diets) = &params.user_diets {
+        if !user_diets.is_empty() {
+            let user_diets_set: HashSet<&str> = user_diets.iter().map(String::as_str).collect();
+            let mut conflicting_tags: Vec<&str> = Vec::new();
+            if user_diets_set.contains("vegan") {
+                conflicting_tags.extend(&[
+                    "en:non-vegan",
+                    "en:contains-milk",
+                    "en:dairy",
+                    "en:contains-eggs",
+                    "en:eggs",
+                    "en:contains-honey",
+                    "en:honey",
+                    "en:contains-meat",
+                    "en:meat",
+                    "en:contains-fish",
+                    "en:fish",
+                    "en:non-vegetarian",
+                    "en:vegetarian-status-unknown",
+                ]);
+            } else if user_diets_set.contains("vegetarian") {
+                conflicting_tags.extend(&[
+                    "en:non-vegetarian",
+                    "en:contains-meat",
+                    "en:meat",
+                    "en:contains-fish",
+                    "en:fish",
+                    "en:vegetarian-status-unknown",
+                ]);
+            }
+            if user_diets_set.contains("gluten_free") {
+                conflicting_tags.extend(&["en:contains-gluten", "en:gluten"]);
+            }
+            if user_diets_set.contains("lactose_free") {
+                conflicting_tags.extend(&["en:contains-milk", "en:dairy"]);
+            }
+            conflicting_tags.sort();
+            conflicting_tags.dedup();
+
+            if !conflicting_tags.is_empty() {
+                info!(
+                    "Applying diet filter (excluding tags): {:?}",
+                    conflicting_tags
+                );
+                filter.insert("labels_tags", doc! { "$nin": conflicting_tags });
+            }
+        }
+    }
+    debug!("Final MongoDB filter: {:?}", filter);
     let limit = params
         .limit
         .unwrap_or(DEFAULT_SEARCH_LIMIT)
@@ -252,7 +305,6 @@ pub async fn search_products(
     debug!("Applying pagination: limit={}, skip={}", limit, skip);
 
     let collection = state.mongo_db.collection::<Product>("products");
-
     let cursor = collection
         .find(filter)
         .with_options(find_options)
@@ -268,7 +320,7 @@ pub async fn search_products(
     })?;
 
     info!(
-        "Found {} products matching search criteria.",
+        "Search completed. Found {} products matching criteria.",
         products.len()
     );
 
@@ -282,9 +334,6 @@ pub async fn create_product(
 ) -> Result<(StatusCode, Json<Product>)> {
     info!("Attempting to create product");
 
-    // TODO: Add payload validation using `validator` if enabled in models.rs
-    // payload.validate().map_err(|e| ... ServiceError::BadRequest(...))?;
-
     let now = Utc::now();
     let mut new_product = Product {
         id: None,
@@ -297,7 +346,8 @@ pub async fn create_product(
         main_category: None,
         labels: None,
         ingredients_text: payload.ingredients_text,
-        allergens_tags: None,
+        allergens_tags: Vec::new(),
+        traces_tags: None,
         image_url: None,
         image_small_url: None,
         countries: None,
@@ -331,6 +381,7 @@ pub async fn create_product(
         insert_result.inserted_id
     );
 
+    // Assign the generated ID back to the product struct
     new_product.id = insert_result.inserted_id.as_object_id();
 
     info!(id = %new_product.id.unwrap(), "Returning created product");

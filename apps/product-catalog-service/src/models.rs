@@ -2,7 +2,6 @@ use bson::serde_helpers::chrono_datetime_as_bson_datetime;
 use chrono::{DateTime, Utc};
 use mongodb::bson::oid::ObjectId;
 use serde::{Deserialize, Serialize};
-// use validator::Validate;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Product {
@@ -24,7 +23,9 @@ pub struct Product {
 
     pub ingredients_text: Option<String>,
     #[serde(rename = "traces_tags")]
-    pub allergens_tags: Option<Vec<String>>,
+    pub traces_tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub allergens_tags: Vec<String>,
 
     pub quantity: Option<String>, // Quantity contains number and unit ("500 g")
     pub image_url: Option<String>,
@@ -66,6 +67,7 @@ pub struct UpdateProductPayload {
     pub categories: Option<Vec<String>>,
     pub labels: Option<Vec<String>>,
     pub traces: Option<Vec<String>>,
+    pub allergens_tags: Option<Vec<String>>, // Allow updating allergens
     pub quantity: Option<String>,
     pub countries: Option<Vec<String>>,
     pub nutrition_grade_fr: Option<String>,
@@ -81,4 +83,8 @@ pub struct SearchParams {
     pub nutriscore: Option<String>,
     pub limit: Option<u64>,
     pub offset: Option<u64>,
+    #[serde(rename = "allergens")]
+    pub user_allergens: Option<Vec<String>>,
+    #[serde(rename = "diets")]
+    pub user_diets: Option<Vec<String>>,
 }
