@@ -1,13 +1,37 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:yoloeats_app/models/check_result.dart';
-import 'package:yoloeats_app/providers/product_providers.dart';
-import 'package:yoloeats_app/providers/allergy_check_providers.dart';
+import '../../models/check_result.dart';
+import '../../models/product.dart';
+import '../../providers/product_providers.dart';
+import '../../providers/allergy_check_providers.dart';
+
+import '../widgets/recommendations_bottom_sheet.dart';
 
 class ProductDetailScreen extends ConsumerWidget {
   final String productIdentifier;
 
   const ProductDetailScreen({required this.productIdentifier, super.key});
+
+  void _showRecommendationsBottomSheet(BuildContext context, String productId) {
+    if (productId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Cannot fetch recommendations: Missing Product ID.'))
+      );
+      return;
+    }
+    print("Showing recommendations bottom sheet for product ID: $productId");
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) => FractionallySizedBox(
+        heightFactor: 0.6,
+        child: RecommendationsBottomSheet(productId: productId),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -36,7 +60,7 @@ class ProductDetailScreen extends ConsumerWidget {
             child: Padding(
               padding: const EdgeInsets.all(16.0),
               child: Text(
-                'Could not load product details for "$productIdentifier".\nPlease try again later.',
+                'Could not load product details for "$productIdentifier".\nPlease try again later.\nError: $error',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
@@ -56,6 +80,11 @@ class ProductDetailScreen extends ConsumerWidget {
             );
           }
 
+          final showRecommendationsButton = checkResultAsync.maybeWhen(
+            data: (result) => result.status == SafetyStatus.unsafe || result.status == SafetyStatus.caution,
+            orElse: () => false,
+          );
+
           return SingleChildScrollView(
             padding: const EdgeInsets.all(16.0),
             child: Column(
@@ -63,6 +92,24 @@ class ProductDetailScreen extends ConsumerWidget {
               children: [
                 _buildSafetyHeader(context, checkResultAsync),
                 const SizedBox(height: 16),
+
+                if (showRecommendationsButton) ...[
+                  Center(
+                    child: ElevatedButton.icon(
+                      icon: const Icon(Icons.recommend_outlined),
+                      label: const Text('Find Safe Alternatives'),
+                      onPressed: () {
+                        _showRecommendationsBottomSheet(context, product.id);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.amber[100],
+                        foregroundColor: Colors.black87,
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                ],
 
                 if (product.imageUrl != null && product.imageUrl!.isNotEmpty)
                   Center(
@@ -94,17 +141,20 @@ class ProductDetailScreen extends ConsumerWidget {
                   style: Theme.of(context).textTheme.headlineMedium,
                 ),
                 const SizedBox(height: 8),
+
                 if (product.brandsTags.isNotEmpty)
                   Text(
                     'Brand: ${product.brandsTags.join(', ')}',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
-                if (product.quantity != null)
+
+                if (product.quantity != null && product.quantity!.isNotEmpty)
                   Text(
                     'Quantity: ${product.quantity}',
                     style: Theme.of(context).textTheme.bodyLarge,
                   ),
-                if (product.nutritionGradeFr != null)
+
+                if (product.nutritionGradeFr != null && product.nutritionGradeFr!.isNotEmpty)
                   Text(
                     'Nutri-Score: ${product.nutritionGradeFr!.toUpperCase()}',
                     style: Theme.of(context).textTheme.bodyLarge,
@@ -113,7 +163,9 @@ class ProductDetailScreen extends ConsumerWidget {
 
                 Text('Ingredients:', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 4),
-                Text(product.ingredientsText ?? 'Not available'),
+                Text(product.ingredientsText?.isNotEmpty ?? false
+                    ? product.ingredientsText!
+                    : 'Not available'),
                 const Divider(height: 32),
 
                 if (product.categoriesTags.isNotEmpty) ...[
@@ -126,6 +178,7 @@ class ProductDetailScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: 16),
                 ],
+
                 if (product.labelsTags.isNotEmpty) ...[
                   Text('Labels:', style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 4),
@@ -135,6 +188,21 @@ class ProductDetailScreen extends ConsumerWidget {
                     children: product.labelsTags.map((tag) => Chip(label: Text(tag))).toList(),
                   ),
                 ],
+
+                if (product.tracesTags.isNotEmpty) ...[
+                  const Divider(height: 32),
+                  Text('May Contain (Traces):', style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 8.0,
+                    runSpacing: 4.0,
+                    children: product.tracesTags.map((tag) => Chip(
+                      label: Text(tag),
+                      backgroundColor: Colors.orange[50],
+                    )).toList(),
+                  ),
+                ],
+
 
                 const Divider(height: 32),
               ],
@@ -148,7 +216,18 @@ class ProductDetailScreen extends ConsumerWidget {
   Widget _buildSafetyHeader(BuildContext context, AsyncValue<CheckResult> checkResultAsync) {
     return Card(
       elevation: 2,
-      margin: const EdgeInsets.only(bottom: 16),
+      color: checkResultAsync.maybeWhen(
+        data: (result) {
+          switch (result.status) {
+            case SafetyStatus.safe: return Colors.green[50];
+            case SafetyStatus.unsafe: return Colors.red[50];
+            case SafetyStatus.caution: return Colors.orange[50];
+            case SafetyStatus.offline: return Colors.blue[50];
+            case SafetyStatus.error: return Colors.grey[100];
+          }
+        },
+        orElse: () => Colors.grey[100],
+      ),
       child: Padding(
         padding: const EdgeInsets.all(12.0),
         child: checkResultAsync.when(
@@ -165,6 +244,8 @@ class ProductDetailScreen extends ConsumerWidget {
             String displayError = "Safety check failed";
             if (error is CheckResult && error.status == SafetyStatus.error) {
               displayError = error.errorMessage ?? displayError;
+            } else {
+              displayError = error.toString().split('\n').first;
             }
             return Row(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -202,7 +283,7 @@ class ProductDetailScreen extends ConsumerWidget {
                     Expanded(
                       child: Text(
                         statusText,
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(color: statusColor),
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(color: statusColor, fontWeight: FontWeight.bold),
                       ),
                     ),
                     if (result.isOfflineResult && result.status != SafetyStatus.error)
@@ -217,7 +298,7 @@ class ProductDetailScreen extends ConsumerWidget {
                 if (result.conflictingAllergens.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 4.0),
-                    child: Text("Conflicts with your Allergens: ${result.conflictingAllergens.join(', ')}", style: TextStyle(color: statusColor)),
+                    child: Text("Conflicts with Allergens: ${result.conflictingAllergens.join(', ')}", style: TextStyle(color: statusColor)),
                   ),
                 if (result.traceAllergens.isNotEmpty && (result.status == SafetyStatus.caution || result.status == SafetyStatus.unsafe))
                   Padding(
@@ -227,7 +308,7 @@ class ProductDetailScreen extends ConsumerWidget {
                 if (result.conflictingDiets.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 4.0),
-                    child: Text("Conflicts with your Dietary Preferences: ${result.conflictingDiets.join(', ')}", style: TextStyle(color: statusColor)),
+                    child: Text("Conflicts with Diets: ${result.conflictingDiets.join(', ')}", style: TextStyle(color: statusColor)),
                   ),
               ],
             );
@@ -236,4 +317,5 @@ class ProductDetailScreen extends ConsumerWidget {
       ),
     );
   }
+
 }
