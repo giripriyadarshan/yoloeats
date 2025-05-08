@@ -6,6 +6,7 @@ import 'models/allergen_info.dart';
 import 'models/user_profile.dart';
 import 'models/product_info.dart';
 import 'models/product.dart';
+import 'views/main_shell.dart';
 
 const String userProfileBoxName = 'userProfileBox';
 const String allergenListBoxName = 'allergenListBox';
@@ -15,20 +16,40 @@ const String productDetailBoxName = 'productDetailBox';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  final appDocumentDir = await getApplicationDocumentsDirectory();
+  try {
+    print("Initializing Hive...");
+    final appDocumentDir = await getApplicationDocumentsDirectory();
+    await Hive.initFlutter(appDocumentDir.path);
+    print("Hive initialized at ${appDocumentDir.path}");
 
-  await Hive.initFlutter(appDocumentDir.path);
+    if (!Hive.isAdapterRegistered(RiskLevelAdapter().typeId)) {
+      Hive.registerAdapter(RiskLevelAdapter());
+    }
+    if (!Hive.isAdapterRegistered(UserProfileAdapter().typeId)) {
+      Hive.registerAdapter(UserProfileAdapter());
+    }
+    if (!Hive.isAdapterRegistered(AllergenInfoAdapter().typeId)) {
+      Hive.registerAdapter(AllergenInfoAdapter());
+    }
+    if (!Hive.isAdapterRegistered(ProductInfoAdapter().typeId)) {
+      Hive.registerAdapter(ProductInfoAdapter());
+    }
+    if (!Hive.isAdapterRegistered(ProductAdapter().typeId)) {
+      Hive.registerAdapter(ProductAdapter());
+    }
+    print("Hive adapters registered.");
 
-  Hive.registerAdapter(RiskLevelAdapter());
-  Hive.registerAdapter(UserProfileAdapter());
-  Hive.registerAdapter(AllergenInfoAdapter());
-  Hive.registerAdapter(ProductInfoAdapter());
-  Hive.registerAdapter(ProductAdapter());
+    print("Opening Hive boxes...");
+    await Hive.openBox<UserProfile>(userProfileBoxName);
+    await Hive.openBox<List>(allergenListBoxName);
+    await Hive.openBox<ProductInfo>(productCacheBoxName);
+    await Hive.openBox<Product>(productDetailBoxName);
+    print("Hive boxes opened.");
 
-  await Hive.openBox<UserProfile>(userProfileBoxName);
-  await Hive.openBox<List>(allergenListBoxName);
-  await Hive.openBox<ProductInfo>(productCacheBoxName);
-  await Hive.openBox<Product>(productDetailBoxName);
+  } catch (e) {
+    print("!!!! HIVE INITIALIZATION FAILED: $e !!!!");
+  }
+
 
   runApp(
     const ProviderScope(
@@ -47,13 +68,13 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
+        // bottomNavigationBarTheme: BottomNavigationBarThemeData(
+        //   selectedItemColor: Colors.amber[800],
+        //   unselectedItemColor: Colors.grey,
+        // ),
       ),
-      // TODO: Replace with your actual home screen/widget
-      home: const Scaffold(
-        body: Center(
-          child: Text('App Initialized with Hive and Riverpod!'),
-        ),
-      ),
+      debugShowCheckedModeBanner: false,
+      home: const MainShell(),
     );
   }
 }
