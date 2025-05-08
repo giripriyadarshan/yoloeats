@@ -28,7 +28,7 @@ class TFLiteService {
   bool get isModelLoaded => _isModelLoaded;
 
   Future<void> loadModel({
-    String modelAsset = "assets/yolov8n_float16.tflite",
+    String modelAsset = "assets/yoloeats_v1.tflite",
     String labelsAsset = "assets/labels.txt",
     int numThreads = 1,
   }) async {

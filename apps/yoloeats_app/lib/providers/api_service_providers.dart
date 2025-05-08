@@ -14,7 +14,7 @@ const String _apiPrefix = "/api/v1";
 
 String _getBaseUrl(String port) {
   if (!kIsWeb && Platform.isAndroid) {
-    return 'http://10.0.2.2:$port$_apiPrefix';
+    return 'http://100.87.156.48:$port$_apiPrefix';
   } else {
     return 'http://localhost:$port$_apiPrefix';
   }

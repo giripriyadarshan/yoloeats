@@ -28,6 +28,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   void _navigateToDetail(Product product) {
     if (product.code.isNotEmpty) {
+      FocusScope.of(context).unfocus();
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -39,13 +40,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           const SnackBar(content: Text('Product has no barcode to view details.'))
       );
     }
-
   }
 
   @override
   Widget build(BuildContext context) {
     final searchState = ref.watch(searchNotifierProvider);
     final searchNotifier = ref.read(searchNotifierProvider.notifier);
+
+    print("SearchScreen build: isLoading=${searchState.isLoading}, results=${searchState.results.length}, error=${searchState.error}, query=${searchState.currentQuery}");
+
 
     return Scaffold(
       appBar: AppBar(
@@ -59,32 +62,39 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               controller: _textController,
               autofocus: true,
               decoration: InputDecoration(
-                hintText: 'Search by name, brand, category...',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.clear),
-                  onPressed: () {
-                    _textController.clear();
-                    searchNotifier.clearSearch();
-                  },
-                ),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8.0),
-                ),
+                  hintText: 'Search by name, brand, category...',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.clear),
+                    tooltip: "Clear Search",
+                    onPressed: () {
+                      _textController.clear();
+                      searchNotifier.clearSearch();
+                    },
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8.0),
+                    borderSide: BorderSide(color: Colors.grey.shade400),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8.0),
+                    borderSide: BorderSide(color: Theme.of(context).primaryColor, width: 2.0),
+                  )
               ),
               onChanged: searchNotifier.onSearchQueryChanged,
               onSubmitted: (query) => searchNotifier.onSearchQueryChanged(query),
+              textInputAction: TextInputAction.search,
             ),
           ),
           Expanded(
-            child: _buildResults(searchState),
+            child: _buildResultsList(searchState),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildResults(SearchState searchState) {
+  Widget _buildResultsList(SearchState searchState) {
     if (searchState.isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -102,44 +112,72 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       );
     }
 
-    if (searchState.results.isEmpty) {
-      if (searchState.currentQuery.isEmpty) {
-        return const Center(child: Text('Enter a term above to search products.'));
-      } else {
-        return Center(
-            child: Text(
-                'No results found for "${searchState.currentQuery}".\nTry different keywords.'));
-      }
+    if (searchState.results.isNotEmpty) {
+      return ListView.builder(
+        padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+        itemCount: searchState.results.length,
+        itemBuilder: (context, index) {
+          final product = searchState.results[index];
+          return Card(
+            margin: const EdgeInsets.symmetric(vertical: 4.0),
+            child: ListTile(
+              leading: SizedBox(
+                width: 50,
+                height: 50,
+                child: (product.imageUrl != null && product.imageUrl!.isNotEmpty)
+                    ? ClipRRect(
+                  borderRadius: BorderRadius.circular(4.0),
+                  child: Image.network(
+                    product.imageUrl!,
+                    fit: BoxFit.cover,
+                    loadingBuilder: (context, child, progress) {
+                      if (progress == null) return child;
+                      return Center(child: CircularProgressIndicator(strokeWidth: 2, value: progress.expectedTotalBytes != null ? progress.cumulativeBytesLoaded / progress.expectedTotalBytes! : null));
+                    },
+                    errorBuilder: (context, error, stackTrace) {
+                      return Icon(Icons.broken_image, size: 30, color: Colors.grey[400]);
+                    },
+                  ),
+                )
+                    : Icon(Icons.image_not_supported, size: 30, color: Colors.grey[400]),
+              ),
+              title: Text(product.productName ?? 'Unknown Product', style: const TextStyle(fontWeight: FontWeight.w500)),
+              subtitle: Text(
+                product.brandsTags.isNotEmpty ? product.brandsTags.join(', ') : 'Unknown Brand',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              onTap: () => _navigateToDetail(product),
+              trailing: const Icon(Icons.chevron_right),
+              dense: true,
+            ),
+          );
+        },
+      );
     }
 
-    return ListView.builder(
-      itemCount: searchState.results.length,
-      itemBuilder: (context, index) {
-        final product = searchState.results[index];
-        return ListTile(
-          leading: SizedBox(
-            width: 50,
-            height: 50,
-            child: (product.imageUrl != null && product.imageUrl!.isNotEmpty)
-                ? Image.network(
-              product.imageUrl!,
-              fit: BoxFit.contain,
-              loadingBuilder: (context, child, progress) {
-                if (progress == null) return child;
-                return const Center(child: CircularProgressIndicator(strokeWidth: 2));
-              },
-              errorBuilder: (context, error, stackTrace) {
-                return const Icon(Icons.broken_image, size: 30);
-              },
-            )
-                : const Icon(Icons.image_not_supported, size: 30),
+    if (searchState.currentQuery.isEmpty) {
+      return const Center(
+          child: Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Text(
+              'Enter a term above to search for products by name, brand, or category.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey),
+            ),
+          )
+      );
+    } else {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Text(
+            'No products found matching "${searchState.currentQuery}".\nTry refining your search.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.grey),
           ),
-          title: Text(product.productName ?? 'Unknown Product'),
-          subtitle: Text(product.brandsTags?.join(', ') ?? 'Unknown Brand'),
-          onTap: () => _navigateToDetail(product), // Navigate on tap
-          trailing: const Icon(Icons.chevron_right),
-        );
-      },
-    );
+        ),
+      );
+    }
   }
 }

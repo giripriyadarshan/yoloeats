@@ -22,6 +22,7 @@ Future<void> main() async {
     await Hive.initFlutter(appDocumentDir.path);
     print("Hive initialized at ${appDocumentDir.path}");
 
+    print("Registering Hive adapters...");
     if (!Hive.isAdapterRegistered(RiskLevelAdapter().typeId)) {
       Hive.registerAdapter(RiskLevelAdapter());
     }
@@ -39,15 +40,16 @@ Future<void> main() async {
     }
     print("Hive adapters registered.");
 
-    print("Opening Hive boxes...");
+    print("Opening essential Hive boxes...");
     await Hive.openBox<UserProfile>(userProfileBoxName);
     await Hive.openBox<List>(allergenListBoxName);
     await Hive.openBox<ProductInfo>(productCacheBoxName);
     await Hive.openBox<Product>(productDetailBoxName);
-    print("Hive boxes opened.");
+    print("Essential Hive boxes opened.");
 
-  } catch (e) {
+  } catch (e, stackTrace) {
     print("!!!! HIVE INITIALIZATION FAILED: $e !!!!");
+    print("!!!! Stack Trace: $stackTrace !!!!");
   }
 
 
@@ -68,10 +70,6 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
-        // bottomNavigationBarTheme: BottomNavigationBarThemeData(
-        //   selectedItemColor: Colors.amber[800],
-        //   unselectedItemColor: Colors.grey,
-        // ),
       ),
       debugShowCheckedModeBanner: false,
       home: const MainShell(),

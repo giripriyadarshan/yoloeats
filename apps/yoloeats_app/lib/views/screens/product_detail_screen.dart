@@ -1,37 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/check_result.dart';
-import '../../models/product.dart';
 import '../../providers/product_providers.dart';
 import '../../providers/allergy_check_providers.dart';
-
-import '../widgets/recommendations_bottom_sheet.dart';
 
 class ProductDetailScreen extends ConsumerWidget {
   final String productIdentifier;
 
   const ProductDetailScreen({required this.productIdentifier, super.key});
-
-  void _showRecommendationsBottomSheet(BuildContext context, String productId) {
-    if (productId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Cannot fetch recommendations: Missing Product ID.'))
-      );
-      return;
-    }
-    print("Showing recommendations bottom sheet for product ID: $productId");
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (context) => FractionallySizedBox(
-        heightFactor: 0.6,
-        child: RecommendationsBottomSheet(productId: productId),
-      ),
-    );
-  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -99,7 +75,12 @@ class ProductDetailScreen extends ConsumerWidget {
                       icon: const Icon(Icons.recommend_outlined),
                       label: const Text('Find Safe Alternatives'),
                       onPressed: () {
-                        _showRecommendationsBottomSheet(context, product.id);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Find Safe Alternatives feature coming soon!'),
+                              duration: Duration(seconds: 2),
+                            )
+                        );
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.amber[100],
