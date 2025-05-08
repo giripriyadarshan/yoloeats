@@ -109,13 +109,13 @@ async fn main() -> Result<()> {
         .route("/", post(create_product))
         .route("/search", get(search_products))
         .route(
-            "/:id",
+            "/{id}",
             get(get_product_by_id)
                 .put(update_product)
                 .delete(delete_product),
         )
-        .route("/barcode/:code", get(get_product_by_barcode))
-        .route("/:id/recommendations", get(get_recommendations));
+        .route("/barcode/{code}", get(get_product_by_barcode))
+        .route("/{id}/recommendations", get(get_recommendations));
 
     let app = Router::new()
         .nest("/api/v1/products", api_routes)
