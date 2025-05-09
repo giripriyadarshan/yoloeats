@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
     debug!("USER_PROFILE_SERVICE_URL: {}", user_profile_service_url);
 
     let mongo_client = create_mongo_client(&mongo_uri).await?;
-    let db_handle = mongo_client.database("yoloeats_catalog");
+    let db_handle = mongo_client.database("openfoods");
     info!("MongoDB client connected. Database: {}", db_handle.name());
 
     let redis_client_handle = create_redis_client(&redis_uri)?;
@@ -86,7 +86,7 @@ async fn main() -> Result<()> {
     let http_client = HttpClient::new();
     info!("Reqwest HTTP client created.");
 
-    db_setup::create_indexes(&db_handle).await?;
+    // db_setup::create_indexes(&db_handle).await?;
     info!("MongoDB indexes checked/created successfully.");
 
     let app_state = Arc::new(AppState {

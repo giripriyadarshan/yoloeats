@@ -77,9 +77,9 @@ pub async fn get_product_by_id(
             ServiceError::Redis(e)
         })?;
 
-    match redis_conn.get::<_, String>(&cache_key).await {
-        Ok(cached_product_json) if !cached_product_json.is_empty() => {
-            match serde_json::from_str::<Product>(&cached_product_json) {
+    match redis_conn.get::<_, Option<String>>(&cache_key).await {
+        Ok(Some(cached_product_json_str)) if !cached_product_json_str.is_empty() => {
+            match serde_json::from_str::<Product>(&cached_product_json_str) {
                 Ok(product) => {
                     info!(id = %object_id, "Cache hit for product ID");
                     return Ok(Json(product));
