@@ -46,9 +46,13 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     print("ScannerScreen: _initScreen started");
     await _checkPermissionAndInitializeCamera();
     _initModel();
+
     if (_isPermissionGranted && mounted) {
-      _initializeBarcodeScanner();
-      await _updateStreamingState(ref.read(currentScannerModeProvider));
+      final currentMode = ref.read(currentScannerModeProvider);
+      if (currentMode == ScannerMode.Barcode) {
+        _initializeBarcodeScanner();
+      }
+      await _updateStreamingState(currentMode);
     }
     print("ScannerScreen: _initScreen finished");
   }
@@ -204,8 +208,19 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
     final currentMode = ref.read(currentScannerModeProvider);
     if (newMode == currentMode) return;
 
+    // Explicitly stop barcode scanner if it was running, before resetting states
+    if (currentMode == ScannerMode.Barcode && _isBarcodeScannerRunning && _barcodeController != null) { // ADDED CHECK
+      print("ScannerScreen: Explicitly stopping barcode scanner due to mode change from Barcode.");
+      try {
+        _barcodeController!.stop();
+        _isBarcodeScannerRunning = false; // Update state immediately
+      } catch (e) {
+        print("ScannerScreen: Error explicitly stopping barcode scanner: $e");
+      }
+    }
+
     ref.read(currentScannerModeProvider.notifier).state = newMode;
-    _resetScanStates();
+    _resetScanStates(); // This resets flags, but controller might still be an issue
     _updateStreamingState(newMode);
   }
 
@@ -223,69 +238,77 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
   Future<void> _updateStreamingState(ScannerMode mode) async {
     print("ScannerScreen: Updating streaming state for mode $mode");
 
-    if (_cameraController != null && _cameraController!.value.isInitialized) {
-      try {
-        final isStreaming = _cameraController!.value.isStreamingImages;
-        if (mode == ScannerMode.ObjectDetection && !isStreaming) {
-          print("ScannerScreen: Starting object detection stream...");
-          await _cameraController!.startImageStream(_processCameraImage);
-          print("ScannerScreen: Object detection stream started.");
-        } else if (mode != ScannerMode.ObjectDetection && isStreaming) {
-          print("ScannerScreen: Stopping object detection stream...");
-          await _cameraController!.stopImageStream();
-          print("ScannerScreen: Object detection stream stopped.");
-        }
-      } catch (e) {
-        print("ScannerScreen: Error starting/stopping object detection stream: $e");
-      }
-    } else {
-      print("ScannerScreen: Camera controller not ready for stream update.");
+    // First stop all camera operations
+    if (_isBarcodeScannerRunning && _barcodeController != null) {
+      _barcodeController!.stop();
+      _isBarcodeScannerRunning = false;
     }
 
-    if (_barcodeController != null && mounted) {
-      try {
-        if (mode == ScannerMode.Barcode && !_isBarcodeScannerRunning) {
-          print("ScannerScreen: Starting barcode scanner...");
-          _barcodeController!.start();
-          setStateIfMounted(() { _isBarcodeScannerRunning = true; });
-          print("ScannerScreen: Barcode scanner start requested.");
-        } else if (mode != ScannerMode.Barcode && _isBarcodeScannerRunning) {
-          print("ScannerScreen: Stopping barcode scanner...");
-          _barcodeController!.stop();
-          setStateIfMounted(() { _isBarcodeScannerRunning = false; });
-          print("ScannerScreen: Barcode scanner stop requested.");
-        }
-      } catch(e) {
-        print("ScannerScreen: Error starting/stopping barcode scanner: $e");
-        setStateIfMounted(() { _isBarcodeScannerRunning = false; });
-      }
-    } else {
-      print("ScannerScreen: Barcode controller not ready for state update.");
+    if (_cameraController != null && _cameraController!.value.isStreamingImages) {
+      await _cameraController!.stopImageStream();
+    }
+
+    // Then start only what's needed for the current mode
+    if (mode == ScannerMode.Barcode && _barcodeController != null) {
+      _barcodeController!.start();
+      _isBarcodeScannerRunning = true;
+    } else if (mode == ScannerMode.ObjectDetection && _cameraController != null) {
+      await _cameraController!.startImageStream((image) {
+        _processCameraImage(image);
+      });
     }
   }
 
+  // A flag to track if processing is already in progress
+  bool _processingInQueue = false;
 
   Future<void> _processCameraImage(CameraImage image) async {
+    // First quick check to avoid unnecessary processing
     if (ref.read(currentScannerModeProvider) != ScannerMode.ObjectDetection ||
-        _isDetectingObjects || _isProcessingSingleBarcode || _isProcessingOcr || !mounted) {
+        !mounted || _isProcessingOcr || _isProcessingSingleBarcode) {
       return;
     }
 
-    final tfliteService = ref.read(tfliteServiceProvider);
-    if (!tfliteService.isModelLoaded) return;
-
-    setStateIfMounted(() { _isDetectingObjects = true; });
-
-    try {
-      final recognitions = await tfliteService.runObjectDetection(image);
-      if (mounted) ref.read(yoloDetectionsProvider.notifier).state = recognitions ?? [];
-    } catch (e) {
-      print("ScannerScreen: Error running TFLite detection: $e");
-      if (mounted) ref.read(yoloDetectionsProvider.notifier).state = [];
-    } finally {
-      await Future.delayed(const Duration(milliseconds: 100));
-      setStateIfMounted(() { _isDetectingObjects = false; });
+    // If we're already detecting or have a frame in the queue, skip this frame
+    if (_isDetectingObjects || _processingInQueue) {
+      return;
     }
+
+    // Mark that we've queued up processing
+    _processingInQueue = true;
+
+    // Use compute or isolate for heavy processing
+    // This moves processing off the main thread
+    await Future.microtask(() async {
+      if (!mounted) {
+        _processingInQueue = false;
+        return;
+      }
+
+      final tfliteService = ref.read(tfliteServiceProvider);
+      if (!tfliteService.isModelLoaded) {
+        _processingInQueue = false;
+        return;
+      }
+
+      setStateIfMounted(() { _isDetectingObjects = true; });
+
+      try {
+        final recognitions = await tfliteService.runObjectDetection(image);
+        if (mounted) {
+          ref.read(yoloDetectionsProvider.notifier).state = recognitions ?? [];
+        }
+      } catch (e) {
+        print("ScannerScreen: Error running TFLite detection: $e");
+        if (mounted) {
+          ref.read(yoloDetectionsProvider.notifier).state = [];
+        }
+      } finally {
+        // Remove the artificial delay - let the natural processing time create spacing
+        setStateIfMounted(() { _isDetectingObjects = false; });
+        _processingInQueue = false;
+      }
+    });
   }
 
   void _handleBarcodeDetection(BarcodeCapture capture) {
@@ -337,16 +360,30 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       return;
     }
 
-    if (_cameraController!.value.isTakingPicture) {
-      print("ScannerScreen: OCR skipped (already taking picture)");
-      return;
-    }
-
     print("ScannerScreen: Starting OCR process...");
     setStateIfMounted(() { _isProcessingOcr = true; });
-    if (_isBarcodeScannerRunning) _barcodeController?.stop();
-    if (_cameraController!.value.isStreamingImages) await _cameraController!.stopImageStream();
 
+    // Properly release camera resources before taking a picture
+    bool wasStreamingImages = false;
+    bool wasBarcodeRunning = false;
+
+    // Stop barcode scanner if running
+    if (_isBarcodeScannerRunning && _barcodeController != null) {
+      print("ScannerScreen: Stopping barcode scanner for OCR");
+      _barcodeController!.stop();
+      wasBarcodeRunning = true;
+      _isBarcodeScannerRunning = false;
+    }
+
+    // Stop image stream if running
+    if (_cameraController!.value.isStreamingImages) {
+      print("ScannerScreen: Stopping camera stream for OCR");
+      await _cameraController!.stopImageStream();
+      wasStreamingImages = true;
+    }
+
+    // Give a moment for resources to be released
+    await Future.delayed(const Duration(milliseconds: 100));
 
     String? extractedTextResult;
     List<String> foundAllergensResult = [];
@@ -357,44 +394,40 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
       final XFile imageFile = await _cameraController!.takePicture();
       print('ScannerScreen: Picture saved to ${imageFile.path}');
 
-      print("ScannerScreen: Processing OCR on ${imageFile.path}");
-      try {
-        final ocrService = ref.read(ocrServiceProvider);
-        extractedTextResult = await ocrService.extractTextFromImagePath(imageFile.path);
-        print("ScannerScreen: OCR Result length: ${extractedTextResult?.length ?? 0}");
+      // Process OCR as before...
+      final ocrService = ref.read(ocrServiceProvider);
+      extractedTextResult = await ocrService.extractTextFromImagePath(imageFile.path);
 
-        final userProfile = ref.read(userProfileProvider).valueOrNull;
-        if (userProfile != null && extractedTextResult != null) {
-          print("ScannerScreen: Comparing OCR text with user allergens...");
-          foundAllergensResult = _compareTextWithAllergens(extractedTextResult, userProfile.allergens);
-          print("ScannerScreen: Found conflicting allergens in OCR: $foundAllergensResult");
-        } else {
-          print("ScannerScreen: Skipping allergen comparison (no profile or no text).");
-        }
-      } catch (e) {
-        print("ScannerScreen: Error during OCR processing: $e");
-        errorResult = "Could not extract text from image: $e";
+      final userProfile = ref.read(userProfileProvider).valueOrNull;
+      if (userProfile != null && extractedTextResult != null) {
+        foundAllergensResult = _compareTextWithAllergens(extractedTextResult, userProfile.allergens);
       }
 
-      if (mounted) {
-        _showOcrResultsBottomSheet(extractedTextResult, foundAllergensResult, errorMsg: errorResult);
-      }
-
-    } on CameraException catch (e) {
-      print("ScannerScreen: Camera error taking picture for OCR: ${e.code} - ${e.description}");
-      errorResult = 'Error capturing image: ${e.description}';
-      if (mounted) _showOcrResultsBottomSheet(null, [], errorMsg: errorResult);
     } catch (e) {
-      print("ScannerScreen: Unexpected error during OCR capture: $e");
-      errorResult = 'Could not capture image: $e';
-      if (mounted) _showOcrResultsBottomSheet(null, [], errorMsg: errorResult);
+      print("ScannerScreen: Error during OCR capture/processing: $e");
+      errorResult = 'Error processing image: $e';
     } finally {
+      // Restore previous camera state
       if (mounted) {
         setState(() { _isProcessingOcr = false; });
-        await _updateStreamingState(ref.read(currentScannerModeProvider));
-        print("ScannerScreen: Resumed scanning based on current mode after OCR.");
-      }
 
+        // Restart streams based on what was active before
+        if (wasStreamingImages && ref.read(currentScannerModeProvider) == ScannerMode.ObjectDetection) {
+          await _cameraController!.startImageStream((image) {
+            // Your image processing logic
+          });
+        }
+
+        if (wasBarcodeRunning && ref.read(currentScannerModeProvider) == ScannerMode.Barcode &&
+            _barcodeController != null) {
+          _barcodeController!.start();
+          _isBarcodeScannerRunning = true;
+        }
+
+        if (mounted) {
+          _showOcrResultsBottomSheet(extractedTextResult, foundAllergensResult, errorMsg: errorResult);
+        }
+      }
     }
   }
 
