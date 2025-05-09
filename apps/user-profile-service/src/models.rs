@@ -35,10 +35,10 @@ pub struct UserProfile {
     pub risk_tolerance: RiskLevel,
 
     #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
-    pub created_at: DateTime<Utc>, // Correct type for the helper
+    pub created_at: DateTime<Utc>,
 
     #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
-    pub updated_at: DateTime<Utc>, // Correct type for the helper
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Validate)]
@@ -61,9 +61,9 @@ pub struct UpdateProfilePayload {
     pub risk_tolerance: Option<RiskLevel>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AllergenInfo {
-    pub id: String,                  // Simple identifier (e.g., "gluten", "milk")
-    pub name: String,                // User-friendly name
-    pub description: Option<String>, // Optional longer description
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
 }
