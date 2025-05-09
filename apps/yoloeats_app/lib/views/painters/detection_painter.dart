@@ -7,7 +7,7 @@ class DetectionPainter extends CustomPainter {
   final Size previewSize;
   // TODO: Add Camera Image rotation and camera lens direction if needed for accurate scaling
 
-  DetectionPainter(this.detections, this.previewSize);
+  DetectionPainter(this.detections, this.previewSize, double scale, double offsetX, double offsetY);
 
   @override
   void paint(Canvas canvas, Size size) {

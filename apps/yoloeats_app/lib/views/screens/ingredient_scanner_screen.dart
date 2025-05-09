@@ -56,7 +56,7 @@ class _IngredientScannerScreenState extends ConsumerState<IngredientScannerScree
       _cameras = await availableCameras();
       if (_cameras?.isEmpty ?? true) throw CameraException("NO_CAMERAS", "No cameras found.");
       CameraDescription selectedCamera = _cameras!.firstWhere((cam) => cam.lensDirection == CameraLensDirection.back, orElse: () => _cameras!.first);
-      _cameraController = CameraController(selectedCamera, ResolutionPreset.high, enableAudio: false);
+      _cameraController = CameraController(selectedCamera, ResolutionPreset.medium, enableAudio: false);
       await _cameraController!.initialize();
       if (mounted) setState(() { _isCameraInitialized = true; _cameraInitializationError = null; });
     } on CameraException catch (e) { if (mounted) setState(() => _cameraInitializationError = e);

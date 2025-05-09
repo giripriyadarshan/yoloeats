@@ -3,12 +3,15 @@ use crate::{
     models::{AllergenInfo, UpdateProfilePayload, UserProfile},
     state::AppState,
 };
-use axum::{Json, extract::State};
+use axum::{
+    Json,
+    extract::{Path, State},
+};
 use bson::doc;
 use chrono::Utc;
 use mongodb::{
     Collection,
-    error::ErrorKind,
+    error::ErrorKind as MongoErrorKind,
     options::{FindOneAndUpdateOptions, ReturnDocument},
 };
 use redis::AsyncCommands;
@@ -16,8 +19,6 @@ use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
 use validator::Validate;
 
-// TODO: Replace with actual user ID from authentication context
-const DUMMY_USER_ID: &str = "dummy-user-123";
 const PROFILE_CACHE_KEY_PREFIX: &str = "profile:";
 const CACHE_EXPIRATION_SECONDS: u64 = 3600;
 
@@ -25,17 +26,21 @@ fn profile_cache_key(user_id: &str) -> String {
     format!("{}{}", PROFILE_CACHE_KEY_PREFIX, user_id)
 }
 
-#[instrument(skip(state), fields(user_id = DUMMY_USER_ID))] // Log hardcoded ID for now
-pub async fn get_profile(State(state): State<Arc<AppState>>) -> Result<Json<UserProfile>> {
-    // TODO: Extract actual user_id from token/session/authentication context
-    let user_id = DUMMY_USER_ID;
-    info!("Attempting to get profile for user_id: {}", user_id);
+#[instrument(skip(state), fields(user_id = %user_id_param))]
+pub async fn get_profile(
+    State(state): State<Arc<AppState>>,
+    Path(user_id_param): Path<String>,
+) -> Result<Json<UserProfile>> {
+    info!("Attempting to get profile for user_id: {}", user_id_param);
 
-    let cache_key = profile_cache_key(user_id);
+    let cache_key = profile_cache_key(&user_id_param);
 
-    let mut redis_conn = state.redis_client.get_multiplexed_async_connection().await
+    let mut redis_conn = state
+        .redis_client
+        .get_multiplexed_async_connection()
+        .await
         .map_err(|e| {
-            warn!(user_id = %user_id, "Failed to get Redis connection: {}. Proceeding without cache.", e);
+            warn!(user_id = %user_id_param, "Failed to get Redis connection: {}. Proceeding without cache.", e);
             AppError::Redis(e)
         })?;
 
@@ -43,34 +48,34 @@ pub async fn get_profile(State(state): State<Arc<AppState>>) -> Result<Json<User
         Ok(cached_profile_json) if !cached_profile_json.is_empty() => {
             match serde_json::from_str::<UserProfile>(&cached_profile_json) {
                 Ok(profile) => {
-                    info!(user_id = %user_id, "Cache hit for user profile");
+                    info!(user_id = %user_id_param, "Cache hit for user profile");
                     return Ok(Json(profile));
                 }
                 Err(e) => {
-                    error!(user_id = %user_id, "Failed to deserialize cached profile: {}. Fetching from DB.", e);
+                    error!(user_id = %user_id_param, "Failed to deserialize cached profile: {}. Fetching from DB.", e);
                 }
             }
         }
         Ok(_) => {
-            debug!(user_id = %user_id, "Cache miss for user profile.");
+            debug!(user_id = %user_id_param, "Cache miss for user profile (key not found or empty).");
         }
         Err(e) => {
-            warn!(user_id = %user_id, "Redis GET command failed: {}. Fetching from DB.", e);
+            warn!(user_id = %user_id_param, "Redis GET command failed: {}. Fetching from DB.", e);
         }
     }
 
-    debug!(user_id = %user_id, "Fetching profile from MongoDB");
-    let collection = state.mongo_db.collection::<UserProfile>("user_profiles");
-    let filter = doc! { "user_id": user_id };
+    debug!(user_id = %user_id_param, "Fetching profile from MongoDB");
+    let collection: Collection<UserProfile> = state.mongo_db.collection("user_profiles");
+    let filter = doc! { "user_id": user_id_param.clone() };
 
     let db_profile = collection.find_one(filter).await.map_err(|e| {
-        error!(user_id = %user_id, "MongoDB find_one failed: {}", e);
+        error!(user_id = %user_id_param, "MongoDB find_one failed: {}", e);
         AppError::MongoDb(e)
     })?;
 
     match db_profile {
         Some(profile) => {
-            info!(user_id = %user_id, "Profile found in DB");
+            info!(user_id = %user_id_param, "Profile found in DB");
             match serde_json::to_string(&profile) {
                 Ok(profile_json) => {
                     match redis_conn
@@ -78,84 +83,71 @@ pub async fn get_profile(State(state): State<Arc<AppState>>) -> Result<Json<User
                         .await
                     {
                         Ok(_) => {
-                            info!(user_id = %user_id, key = %cache_key, "Successfully cached profile in Redis")
+                            info!(user_id = %user_id_param, key = %cache_key, "Successfully cached profile in Redis")
                         }
                         Err(e) => {
-                            warn!(user_id = %user_id, key = %cache_key, "Failed to cache profile in Redis (SETEX): {}", e)
+                            warn!(user_id = %user_id_param, key = %cache_key, "Failed to cache profile in Redis (SETEX): {}", e)
                         }
                     }
                 }
                 Err(e) => {
-                    warn!(user_id = %user_id, "Failed to serialize profile for caching: {}", e)
+                    warn!(user_id = %user_id_param, "Failed to serialize profile for caching: {}", e);
                 }
             }
             Ok(Json(profile))
         }
         None => {
-            info!(user_id = %user_id, "Profile not found in DB");
+            info!(user_id = %user_id_param, "Profile not found in DB");
             Err(AppError::NotFound(format!(
                 "Profile for user {} not found",
-                user_id
+                user_id_param
             )))
         }
     }
 }
 
-#[instrument(skip(state, payload), fields(user_id = DUMMY_USER_ID))] // Log hardcoded ID for now
+#[instrument(skip(state, payload), fields(user_id = %user_id_param))]
 pub async fn update_profile(
     State(state): State<Arc<AppState>>,
+    Path(user_id_param): Path<String>,
     Json(payload): Json<UpdateProfilePayload>,
 ) -> Result<Json<UserProfile>> {
-    // TODO: Extract actual user_id from token/session/authentication context
-    let user_id = DUMMY_USER_ID;
-    info!("Attempting to update profile for user_id: {}", user_id);
+    info!(
+        "Attempting to update profile for user_id: {}",
+        user_id_param
+    );
 
     payload.validate().map_err(|e| {
-        error!(user_id = %user_id, "Payload validation failed: {}", e);
+        error!(user_id = %user_id_param, "Payload validation failed: {}", e);
         AppError::BadRequest(format!("Input validation failed: {}", e).replace('\n', ", "))
     })?;
-    debug!(user_id = %user_id, "Payload validated successfully");
+    debug!(user_id = %user_id_param, "Payload validated successfully");
 
-    let mut set_doc = doc! {};
-    if let Some(val) = payload.username {
-        set_doc.insert("username", val);
-    }
-    if let Some(val) = payload.email {
-        set_doc.insert("email", val);
-    }
-    if let Some(val) = payload.allergens {
-        set_doc.insert("allergens", val);
-    }
-    if let Some(val) = payload.dietary_prefs {
-        set_doc.insert("dietary_prefs", val);
-    }
-    if let Some(val) = payload.risk_tolerance {
-        set_doc.insert("risk_tolerance", bson::to_bson(&val)?);
-    }
+    let mut set_updates_doc = bson::to_document(&payload).map_err(AppError::BsonSerialize)?;
 
-    if set_doc.is_empty() {
-        warn!(user_id = %user_id, "Update request received with no fields to update.");
+    if set_updates_doc.is_empty() {
+        warn!(user_id = %user_id_param, "Update request received with no updatable fields from payload.");
         return Err(AppError::BadRequest(
             "No fields provided for update.".to_string(),
         ));
     }
 
     let now = Utc::now();
-    set_doc.insert("updated_at", now);
+    set_updates_doc.insert("updated_at", bson::DateTime::from_chrono(now));
 
     let set_on_insert_doc = doc! {
-        "user_id": user_id,
-        "created_at": now
+        "user_id": user_id_param.clone(),
+        "created_at": bson::DateTime::from_chrono(now)
     };
 
     let update_doc = doc! {
-        "$set": set_doc,
+        "$set": set_updates_doc,
         "$setOnInsert": set_on_insert_doc
     };
-    debug!(user_id = %user_id, update = ?update_doc, "Constructed upsert document");
+    debug!(user_id = %user_id_param, update = ?update_doc, "Constructed upsert document");
 
     let collection: Collection<UserProfile> = state.mongo_db.collection("user_profiles");
-    let filter = doc! { "user_id": user_id };
+    let filter = doc! { "user_id": user_id_param.clone() };
     let options = FindOneAndUpdateOptions::builder()
         .upsert(true)
         .return_document(ReturnDocument::After)
@@ -168,66 +160,95 @@ pub async fn update_profile(
 
     match update_result {
         Ok(Some(updated_profile)) => {
-            info!(user_id = %user_id, id = updated_profile.id.map(|id| id.to_string()).unwrap_or_default(), "Successfully upserted user profile in DB");
+            info!(user_id = %user_id_param, id = updated_profile.id.map(|id| id.to_string()).unwrap_or_default(), "Successfully upserted user profile in DB");
 
-            let cache_key = profile_cache_key(user_id);
-            debug!(user_id = %user_id, key = %cache_key, "Attempting to invalidate cache");
+            let cache_key = profile_cache_key(&user_id_param);
+            debug!(user_id = %user_id_param, key = %cache_key, "Attempting to invalidate cache");
             match state.redis_client.get_multiplexed_async_connection().await {
                 Ok(mut redis_conn) => match redis_conn.del::<_, i64>(&cache_key).await {
                     Ok(deleted_count) if deleted_count > 0 => {
-                        info!(user_id = %user_id, key = %cache_key, "Successfully invalidated cache")
+                        info!(user_id = %user_id_param, key = %cache_key, count = deleted_count, "Successfully invalidated cache")
                     }
                     Ok(_) => {
-                        debug!(user_id = %user_id, key = %cache_key, "Cache key did not exist for invalidation")
+                        debug!(user_id = %user_id_param, key = %cache_key, "Cache key did not exist for invalidation, or no keys deleted.")
                     }
                     Err(e) => {
-                        warn!(user_id = %user_id, key = %cache_key, "Failed to invalidate cache (DEL command failed): {}", e)
+                        warn!(user_id = %user_id_param, key = %cache_key, "Failed to invalidate cache (DEL command failed): {}", e)
                     }
                 },
                 Err(e) => {
-                    warn!(user_id = %user_id, key = %cache_key, "Failed to get Redis connection for cache invalidation: {}", e)
+                    warn!(user_id = %user_id_param, key = %cache_key, "Failed to get Redis connection for cache invalidation: {}", e)
                 }
             }
-
             Ok(Json(updated_profile))
         }
         Ok(None) => {
-            error!(user_id = %user_id, "Upsert operation returned None unexpectedly.");
+            error!(user_id = %user_id_param, "Upsert operation returned None unexpectedly. This might indicate an issue with MongoDB's return behavior or query.");
             Err(AppError::Internal(
-                "Profile update failed unexpectedly.".to_string(),
+                "Profile update failed unexpectedly after upsert operation.".to_string(),
             ))
         }
         Err(e) => {
-            if let ErrorKind::Write(mongodb::error::WriteFailure::WriteError(write_error)) =
+            if let MongoErrorKind::Write(mongodb::error::WriteFailure::WriteError(write_error)) =
                 *e.kind.clone()
             {
                 if write_error.code == 11000 {
-                    error!(user_id = %user_id, "Duplicate key error on upsert: {}", e);
+                    error!(user_id = %user_id_param, "Duplicate key error on upsert: {}. This could indicate a race condition or an issue with the upsert logic if user_id is not the shard key or has a unique constraint being violated unexpectedly.", e);
                     return Err(AppError::BadRequest(
-                        "Update failed due to conflicting unique key.".to_string(),
+                                                     "Update failed due to a conflicting unique identifier. Please check data integrity.".to_string(),
                     ));
                 }
             }
-            error!(user_id = %user_id, "Failed to upsert profile in DB: {}", e);
+            error!(user_id = %user_id_param, "Failed to upsert profile in DB: {}", e);
             Err(AppError::MongoDb(e))
         }
     }
 }
 
-#[instrument]
-pub async fn get_allergens() -> Result<Json<Vec<AllergenInfo>>> {
+#[instrument(skip(state))]
+pub async fn get_allergens(State(state): State<Arc<AppState>>) -> Result<Json<Vec<AllergenInfo>>> {
     info!("Fetching list of common allergens");
 
-    // TODO: Implement Redis caching for this list
-    // 1. Define cache key: e.g., "allergens:list"
-    // 2. Try fetching from Redis using state.redis_client
-    // 3. If cache hit (and data deserializes ok), return cached Json(data)
-    // 4. If cache miss or error: proceed to generate list below
-    // 5. After generating list, serialize it to JSON and store in Redis cache
-    //    using SETEX with a suitable TTL (e.g., 86400 seconds for 24 hours)
-    // 6. Return Ok(Json(allergen_list))
+    let cache_key = "allergens:list_v1";
 
-    // Hardcoded list based on EU 14 major allergens
+    let mut redis_conn = state
+        .redis_client
+        .get_multiplexed_async_connection()
+        .await
+        .map_err(|e| {
+            warn!(
+                "Failed to get Redis connection for allergens: {}. Proceeding without cache.",
+                e
+            );
+            AppError::Redis(e)
+        })?;
+
+    match redis_conn.get::<_, String>(&cache_key).await {
+        Ok(cached_allergens_json) if !cached_allergens_json.is_empty() => {
+            match serde_json::from_str::<Vec<AllergenInfo>>(&cached_allergens_json) {
+                Ok(allergens) => {
+                    info!("Cache hit for allergens list.");
+                    return Ok(Json(allergens));
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to deserialize cached allergens list: {}. Fetching from source.",
+                        e
+                    );
+                }
+            }
+        }
+        Ok(_) => {
+            debug!("Cache miss for allergens list (key not found or empty).");
+        }
+        Err(e) => {
+            warn!(
+                "Redis GET command failed for allergens: {}. Fetching from source.",
+                e
+            );
+        }
+    }
+
     let allergens = vec![
         AllergenInfo { id: "gluten".to_string(), name: "Cereals containing gluten".to_string(), description: Some("Includes wheat (such as spelt and khorasan wheat), rye, barley, oats.".to_string()) },
         AllergenInfo { id: "crustaceans".to_string(), name: "Crustaceans".to_string(), description: Some("Includes crabs, lobsters, prawns, scampi.".to_string()) },
@@ -244,6 +265,26 @@ pub async fn get_allergens() -> Result<Json<Vec<AllergenInfo>>> {
         AllergenInfo { id: "lupin".to_string(), name: "Lupin".to_string(), description: None },
         AllergenInfo { id: "molluscs".to_string(), name: "Molluscs".to_string(), description: Some("Includes mussels, oysters, squid, snails.".to_string()) },
     ];
+    debug!("Generated allergens list ({} items)", allergens.len());
+
+    match serde_json::to_string(&allergens) {
+        Ok(allergens_json) => {
+            match redis_conn
+                .set_ex::<_, _, ()>(&cache_key, allergens_json, 86400)
+                .await
+            {
+                Ok(_) => {
+                    info!(key = %cache_key, "Successfully cached allergens list in Redis");
+                }
+                Err(e) => {
+                    warn!(key = %cache_key, "Failed to cache allergens list in Redis (SETEX): {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            warn!("Failed to serialize allergens list for caching: {}", e);
+        }
+    }
 
     Ok(Json(allergens))
 }

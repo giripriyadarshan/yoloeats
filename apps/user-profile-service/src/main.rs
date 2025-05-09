@@ -56,12 +56,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let profile_routes = Router::new().route("/", get(get_profile).put(update_profile));
+    let user_profile_routes =
+        Router::new().route("/{user_id}/profile", get(get_profile).put(update_profile));
+
     let allergen_routes = Router::new().route("/", get(get_allergens));
 
     let app = Router::new()
         .route("/", get(root_handler))
-        .nest("/api/v1/profile", profile_routes)
+        .nest("/api/v1/users", user_profile_routes)
         .nest("/api/v1/allergens", allergen_routes)
         .layer(cors)
         .with_state(app_state);
@@ -72,7 +74,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Server configured to listen on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    warn!("Warning: Authentication not implemented.");
+    warn!(
+        "Warning: Authentication not implemented. User ID in path is currently not validated against an authenticated principal."
+    );
     info!(
         "User Profile Service (V2) successfully started, listening on {}",
         addr

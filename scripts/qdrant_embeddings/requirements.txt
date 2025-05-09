@@ -1,0 +1,6 @@
+pymongo[srv]
+qdrant-client
+sentence-transformers
+python-dotenv
+tqdm
+torch

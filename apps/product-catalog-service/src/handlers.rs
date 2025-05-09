@@ -1,30 +1,49 @@
-use crate::models::{CreateProductPayload, UpdateProductPayload};
 use crate::{
     errors::{Result, ServiceError},
-    models::{Product, SearchParams},
+    models::{CreateProductPayload, Product, SearchParams, UpdateProductPayload},
     state::AppState,
 };
-use axum::http::StatusCode;
 use axum::{
     Json,
     extract::{Path, Query, State},
+    http::StatusCode,
 };
 use bson::{doc, oid::ObjectId};
 use chrono::Utc;
 use futures::stream::TryStreamExt;
-use mongodb::options::FindOptions;
 use mongodb::{
     error::ErrorKind,
-    options::{FindOneAndUpdateOptions, ReturnDocument},
+    options::{FindOneAndUpdateOptions, FindOptions, ReturnDocument},
 };
 use redis::AsyncCommands;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
+
+use qdrant_client::qdrant::{
+    Condition, FieldCondition, Filter, GetPointsBuilder, HasIdCondition, Match, PointId,
+    RepeatedStrings, SearchPoints, WithPayloadSelector, condition::ConditionOneOf,
+    r#match::MatchValue, value::Kind, vectors_output,
+};
+use reqwest::StatusCode as HttpStatus;
+
+use serde::Deserialize;
+use uuid::Uuid;
 
 const CACHE_EXPIRATION_SECONDS: u64 = 300;
 const DEFAULT_SEARCH_LIMIT: u64 = 20;
 const MAX_SEARCH_LIMIT: u64 = 100;
 
+const QDRANT_COLLECTION_NAME: &str = "product_vectors";
+const QDRANT_CODE_PAYLOAD_KEY: &str = "code";
+
+#[derive(Deserialize, Debug, Default)]
+struct UserProfileResponse {
+    #[serde(default)]
+    allergens: Vec<String>,
+    #[serde(default, rename = "dietaryPrefs")]
+    dietary_prefs: Vec<String>,
+}
 fn product_id_cache_key(id: &ObjectId) -> String {
     format!("product:id:{}", id)
 }
@@ -58,9 +77,9 @@ pub async fn get_product_by_id(
             ServiceError::Redis(e)
         })?;
 
-    match redis_conn.get::<_, String>(&cache_key).await {
-        Ok(cached_product_json) if !cached_product_json.is_empty() => {
-            match serde_json::from_str::<Product>(&cached_product_json) {
+    match redis_conn.get::<_, Option<String>>(&cache_key).await {
+        Ok(Some(cached_product_json_str)) if !cached_product_json_str.is_empty() => {
+            match serde_json::from_str::<Product>(&cached_product_json_str) {
                 Ok(product) => {
                     info!(id = %object_id, "Cache hit for product ID");
                     return Ok(Json(product));
@@ -238,8 +257,62 @@ pub async fn search_products(
         }
     }
 
-    debug!("Constructed MongoDB filter: {:?}", filter);
+    if let Some(user_allergens) = &params.user_allergens {
+        if !user_allergens.is_empty() {
+            info!("Applying allergen filter (excluding): {:?}", user_allergens);
+            filter.insert("allergens_tags", doc! { "$nin": user_allergens });
+        }
+    }
 
+    if let Some(user_diets) = &params.user_diets {
+        if !user_diets.is_empty() {
+            let user_diets_set: HashSet<&str> = user_diets.iter().map(String::as_str).collect();
+            let mut conflicting_tags: Vec<&str> = Vec::new();
+            if user_diets_set.contains("vegan") {
+                conflicting_tags.extend(&[
+                    "en:non-vegan",
+                    "en:contains-milk",
+                    "en:dairy",
+                    "en:contains-eggs",
+                    "en:eggs",
+                    "en:contains-honey",
+                    "en:honey",
+                    "en:contains-meat",
+                    "en:meat",
+                    "en:contains-fish",
+                    "en:fish",
+                    "en:non-vegetarian",
+                    "en:vegetarian-status-unknown",
+                ]);
+            } else if user_diets_set.contains("vegetarian") {
+                conflicting_tags.extend(&[
+                    "en:non-vegetarian",
+                    "en:contains-meat",
+                    "en:meat",
+                    "en:contains-fish",
+                    "en:fish",
+                    "en:vegetarian-status-unknown",
+                ]);
+            }
+            if user_diets_set.contains("gluten_free") {
+                conflicting_tags.extend(&["en:contains-gluten", "en:gluten"]);
+            }
+            if user_diets_set.contains("lactose_free") {
+                conflicting_tags.extend(&["en:contains-milk", "en:dairy"]);
+            }
+            conflicting_tags.sort();
+            conflicting_tags.dedup();
+
+            if !conflicting_tags.is_empty() {
+                info!(
+                    "Applying diet filter (excluding tags): {:?}",
+                    conflicting_tags
+                );
+                filter.insert("labels_tags", doc! { "$nin": conflicting_tags });
+            }
+        }
+    }
+    debug!("Final MongoDB filter: {:?}", filter);
     let limit = params
         .limit
         .unwrap_or(DEFAULT_SEARCH_LIMIT)
@@ -252,7 +325,6 @@ pub async fn search_products(
     debug!("Applying pagination: limit={}, skip={}", limit, skip);
 
     let collection = state.mongo_db.collection::<Product>("products");
-
     let cursor = collection
         .find(filter)
         .with_options(find_options)
@@ -268,7 +340,7 @@ pub async fn search_products(
     })?;
 
     info!(
-        "Found {} products matching search criteria.",
+        "Search completed. Found {} products matching criteria.",
         products.len()
     );
 
@@ -282,9 +354,6 @@ pub async fn create_product(
 ) -> Result<(StatusCode, Json<Product>)> {
     info!("Attempting to create product");
 
-    // TODO: Add payload validation using `validator` if enabled in models.rs
-    // payload.validate().map_err(|e| ... ServiceError::BadRequest(...))?;
-
     let now = Utc::now();
     let mut new_product = Product {
         id: None,
@@ -297,7 +366,8 @@ pub async fn create_product(
         main_category: None,
         labels: None,
         ingredients_text: payload.ingredients_text,
-        allergens_tags: None,
+        allergens_tags: Vec::new(),
+        traces_tags: None,
         image_url: None,
         image_small_url: None,
         countries: None,
@@ -331,6 +401,7 @@ pub async fn create_product(
         insert_result.inserted_id
     );
 
+    // Assign the generated ID back to the product struct
     new_product.id = insert_result.inserted_id.as_object_id();
 
     info!(id = %new_product.id.unwrap(), "Returning created product");
@@ -548,4 +619,271 @@ pub async fn delete_product(
             object_id
         )))
     }
+}
+
+#[instrument(skip(state), fields(product_id = %product_id_str))]
+pub async fn get_recommendations(
+    State(state): State<Arc<AppState>>,
+    Path(product_id_str): Path<String>, // This is the MongoDB ObjectId string of the source product
+) -> Result<Json<Vec<Product>>> {
+    info!(
+        "Received recommendation request for source product (Mongo OID): {}",
+        product_id_str
+    );
+
+    let source_qdrant_uuid = Uuid::new_v5(&Uuid::NAMESPACE_DNS, product_id_str.as_bytes());
+    let source_qdrant_uuid_str = source_qdrant_uuid.to_string();
+    let target_point_id_for_qdrant_vector_fetch: PointId = source_qdrant_uuid_str.clone().into();
+
+    debug!(
+        "Source product Mongo OID: {}, Qdrant UUID for vector fetch: {}",
+        product_id_str, source_qdrant_uuid_str
+    );
+
+    let get_request = GetPointsBuilder::new(
+        QDRANT_COLLECTION_NAME.to_string(),
+        vec![target_point_id_for_qdrant_vector_fetch.clone()],
+    )
+    .with_payload(false)
+    .with_vectors(true);
+
+    let retrieve_result = state.qdrant_client.get_points(get_request).await?;
+
+    let target_vector = retrieve_result
+        .result
+        .into_iter()
+        .next()
+        .and_then(|point| point.vectors)
+        .and_then(|vectors| vectors.vectors_options)
+        .and_then(|options| match options {
+            vectors_output::VectorsOptions::Vector(v) => Some(v.data),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            error!(
+                "Target product vector not found in Qdrant for source Mongo OID: {} (Qdrant UUID: {})",
+                product_id_str, source_qdrant_uuid_str
+            );
+            ServiceError::NotFound(format!(
+                "Vector data not found for product OID {}",
+                product_id_str
+            ))
+        })?;
+
+    if target_vector.is_empty() {
+        error!(
+            "Retrieved empty target vector for source Mongo OID: {}",
+            product_id_str
+        );
+        return Err(ServiceError::Internal(format!(
+            "Empty vector found for product OID {}",
+            product_id_str
+        )));
+    }
+    debug!(
+        "Target vector for source product (Mongo OID: {}) retrieved successfully (size: {})",
+        product_id_str,
+        target_vector.len()
+    );
+
+    const DUMMY_USER_ID: &str = "dummy-user-123";
+    warn!(
+        user_id = DUMMY_USER_ID,
+        "Using DUMMY user ID for profile fetch. Replace with actual authenticated user ID."
+    );
+
+    let profile_url = format!(
+        "{}/api/v1/users/{}/profile",
+        state.user_profile_service_url, DUMMY_USER_ID
+    );
+    debug!("Fetching user profile from: {}", profile_url);
+
+    let profile_resp = state
+        .http_client
+        .get(&profile_url)
+        .send()
+        .await
+        .map_err(ServiceError::Reqwest)?;
+    let (user_allergens, user_diets) = match profile_resp.status() {
+        HttpStatus::OK => {
+            let profile = profile_resp
+                .json::<UserProfileResponse>()
+                .await
+                .map_err(|e| {
+                    error!("Failed to deserialize user profile JSON: {}", e);
+                    ServiceError::Internal(format!("Failed to parse profile data: {}", e))
+                })?;
+            debug!(allergens = ?profile.allergens, diets = ?profile.dietary_prefs, "User profile fetched successfully");
+            (profile.allergens, profile.dietary_prefs)
+        }
+        HttpStatus::NOT_FOUND => {
+            warn!(
+                user_id = DUMMY_USER_ID,
+                "User profile not found. Proceeding without personalization filters."
+            );
+            (Vec::new(), Vec::new())
+        }
+        status => {
+            let error_body = profile_resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "Failed to read error body".to_string());
+            error!(%status, body = %error_body, "User profile service request failed");
+            return Err(ServiceError::Internal(format!(
+                "User profile service failed with status {}",
+                status
+            )));
+        }
+    };
+
+    let mut must_not_conditions: Vec<Condition> = Vec::new();
+    must_not_conditions.push(Condition {
+        condition_one_of: Some(ConditionOneOf::HasId(HasIdCondition {
+            has_id: vec![target_point_id_for_qdrant_vector_fetch.clone()],
+        })),
+    });
+
+    if !user_allergens.is_empty() {
+        debug!(
+            "Adding Qdrant filter for user_allergens on 'labels_tags': {:?}",
+            user_allergens
+        );
+        must_not_conditions.push(Condition {
+            condition_one_of: Some(ConditionOneOf::Field(FieldCondition {
+                key: "labels_tags".to_string(), // Ensure this field is indexed for filtering in Qdrant
+                r#match: Some(qdrant_client::qdrant::Match {
+                    // Corrected: direct struct instantiation
+                    match_value: Some(MatchValue::Keywords(RepeatedStrings {
+                        strings: user_allergens,
+                    })),
+                }),
+                ..Default::default() // Use default for other FieldCondition fields
+            })),
+        });
+    }
+
+    if user_diets.contains(&"vegan".to_string()) {
+        debug!("Adding Qdrant filter for vegan diet (excluding 'non-vegan' from 'labels_tags')");
+        let diet_exclusion_tags = vec!["non-vegan".to_string()]; // Example, adjust as per your tags
+        must_not_conditions.push(Condition {
+            condition_one_of: Some(ConditionOneOf::Field(FieldCondition {
+                key: "labels_tags".to_string(), // Ensure this field is indexed
+                r#match: Some(qdrant_client::qdrant::Match {
+                    // Corrected: direct struct instantiation
+                    match_value: Some(MatchValue::Keywords(RepeatedStrings {
+                        strings: diet_exclusion_tags,
+                    })),
+                }),
+                ..Default::default()
+            })),
+        });
+    }
+
+    let qdrant_filter = Filter {
+        must: vec![],
+        must_not: must_not_conditions,
+        should: vec![],
+        min_should: None,
+    };
+    debug!("Constructed Qdrant filter: {:?}", qdrant_filter);
+
+    let search_request = SearchPoints {
+        collection_name: QDRANT_COLLECTION_NAME.into(),
+        vector: target_vector,
+        filter: Some(qdrant_filter),
+        limit: 20,
+        offset: Some(0),
+        with_payload: Some(WithPayloadSelector {
+            selector_options: Some(
+                qdrant_client::qdrant::with_payload_selector::SelectorOptions::Enable(true),
+            ),
+        }),
+        with_vectors: None,
+        score_threshold: None,
+        params: None,
+        vector_name: None,
+        read_consistency: None,
+        timeout: None,
+        shard_key_selector: None,
+        sparse_indices: None,
+    };
+
+    info!("Performing Qdrant similarity search...");
+    let search_result = state.qdrant_client.search_points(search_request).await?;
+    debug!(
+        "Qdrant search returned {} results",
+        search_result.result.len()
+    );
+
+    let mut candidate_barcodes: Vec<String> = Vec::new();
+    for scored_point in search_result.result {
+        if let Some(payload_value) = scored_point.payload.get(QDRANT_CODE_PAYLOAD_KEY) {
+            if let Some(Kind::StringValue(barcode_str)) = &payload_value.kind {
+                if !barcode_str.is_empty() {
+                    candidate_barcodes.push(barcode_str.clone());
+                } else {
+                    warn!(
+                        "Qdrant point ID {:?} had empty '{}' in payload.",
+                        scored_point.id, QDRANT_CODE_PAYLOAD_KEY
+                    );
+                }
+            } else {
+                warn!(
+                    "Qdrant payload field '{}' was not a StringValue for point ID: {:?}",
+                    QDRANT_CODE_PAYLOAD_KEY, scored_point.id
+                );
+            }
+        } else {
+            warn!(
+                "Qdrant point ID {:?} missing '{}' in payload",
+                scored_point.id, QDRANT_CODE_PAYLOAD_KEY
+            );
+        }
+    }
+
+    if candidate_barcodes.is_empty() {
+        info!("No suitable candidates found after Qdrant search (no valid barcodes extracted).");
+        return Ok(Json(vec![]));
+    }
+
+    let unique_candidate_barcodes: Vec<String> = candidate_barcodes
+        .into_iter()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    debug!(
+        "Unique candidate barcodes from Qdrant: {:?}",
+        unique_candidate_barcodes
+    );
+
+    const FINAL_RECOMMENDATION_LIMIT: usize = 10;
+    let final_barcodes_to_fetch: Vec<String> = unique_candidate_barcodes
+        .into_iter()
+        .take(FINAL_RECOMMENDATION_LIMIT)
+        .collect();
+
+    if final_barcodes_to_fetch.is_empty() {
+        info!("No barcodes to fetch from MongoDB after limiting.");
+        return Ok(Json(vec![]));
+    }
+
+    info!(
+        "Fetching details for up to {} products by barcode from MongoDB",
+        final_barcodes_to_fetch.len()
+    );
+
+    let mongo_filter = doc! { "code": { "$in": final_barcodes_to_fetch } };
+    let collection = state.mongo_db.collection::<Product>("products");
+
+    let cursor = collection
+        .find(mongo_filter)
+        .limit(FINAL_RECOMMENDATION_LIMIT as i64)
+        .await?;
+    let recommended_products: Vec<Product> = cursor.try_collect().await?;
+
+    info!(
+        "Returning {} recommended products.",
+        recommended_products.len()
+    );
+    Ok(Json(recommended_products))
 }

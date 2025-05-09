@@ -22,3 +22,16 @@ final currentProductProvider = FutureProvider.autoDispose
 
   return product;
 });
+
+
+final recommendationsProvider =
+FutureProvider.autoDispose.family<List<Product>, String>((ref, productId) {
+  if (productId.isEmpty) {
+    print("Recommendations Provider: Received empty product ID, returning empty list.");
+    return Future.value([]);
+  }
+
+  print("Recommendations Provider: Fetching recommendations for product ID: $productId");
+  final productRepository = ref.watch(productRepositoryProvider);
+  return productRepository.getRecommendations(productId: productId);
+});

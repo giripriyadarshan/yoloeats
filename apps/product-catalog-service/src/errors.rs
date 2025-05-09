@@ -1,8 +1,8 @@
 use axum::{
-    Json,
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Json, Response},
 };
+use qdrant_client::QdrantError;
 use serde_json::json;
 use thiserror::Error;
 use tracing::error;
@@ -18,6 +18,15 @@ pub enum ServiceError {
     #[error("Redis error: {0}")]
     Redis(#[from] redis::RedisError),
 
+    #[error("Qdrant client error: {0}")]
+    Qdrant(#[from] QdrantError),
+
+    #[error("Neo4j client error: {0}")]
+    Neo4j(#[from] neo4rs::Error),
+
+    #[error("HTTP request error: {0}")]
+    Reqwest(#[from] reqwest::Error),
+
     #[error("BSON serialization error: {0}")]
     BsonSerialize(#[from] mongodb::bson::ser::Error),
 
@@ -25,9 +34,16 @@ pub enum ServiceError {
     BsonDeserialize(#[from] mongodb::bson::de::Error),
 
     #[error("Configuration error: Missing environment variable '{0}'")]
-    MissingVariable(String), // Specific variant for missing env vars
+    MissingVariable(String),
+
+    #[error("Configuration error: Invalid environment variable '{0}'")]
+    InvalidVariable(String),
+
     #[error("Configuration error: Dotenv error: {0}")]
     Dotenv(#[from] dotenvy::Error),
+
+    #[error("Environment variable error: {0}")]
+    VarError(#[from] std::env::VarError),
 
     #[error("Invalid input: {0}")]
     BadRequest(String),
@@ -74,6 +90,27 @@ impl IntoResponse for ServiceError {
                     "Cache operation failed".to_string(),
                 )
             }
+            ServiceError::Qdrant(e) => {
+                error!("Qdrant client error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Vector DB operation failed".to_string(),
+                )
+            }
+            ServiceError::Neo4j(e) => {
+                error!("Neo4j client error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Graph DB operation failed".to_string(),
+                )
+            }
+            ServiceError::Reqwest(e) => {
+                error!("Reqwest HTTP client error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal network communication error".to_string(),
+                )
+            }
             ServiceError::BsonSerialize(e) => {
                 error!("BSON serialization error: {}", e);
                 (
@@ -88,11 +125,11 @@ impl IntoResponse for ServiceError {
                     "Failed to deserialize data".to_string(),
                 )
             }
-            ServiceError::MissingVariable(var) => {
-                error!("Configuration error: Missing env var {}", var);
+            ServiceError::MissingVariable(var) | ServiceError::InvalidVariable(var) => {
+                error!("Configuration error: Problem with env var {}", var);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal configuration error".to_string(),
+                    "Internal server configuration error".to_string(),
                 )
             }
             ServiceError::Dotenv(e) => {
@@ -100,6 +137,13 @@ impl IntoResponse for ServiceError {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Internal configuration error".to_string(),
+                )
+            }
+            ServiceError::VarError(e) => {
+                error!("Configuration error: Env var read error {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server configuration error".to_string(),
                 )
             }
             ServiceError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),

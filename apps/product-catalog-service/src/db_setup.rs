@@ -3,7 +3,7 @@ use mongodb::{Database, IndexModel, bson::doc, options::IndexOptions};
 use tracing::{error, info};
 
 pub async fn create_indexes(db: &Database) -> Result<(), mongodb::error::Error> {
-    let collection = db.collection::<Product>("products");
+    let collection = db.collection::<Product>("openfoodfacts_products");
     info!("Attempting to create indexes for 'products' collection...");
 
     let code_options = IndexOptions::builder().unique(true).build();
@@ -52,7 +52,7 @@ pub async fn create_indexes(db: &Database) -> Result<(), mongodb::error::Error> 
     {
         Ok(result) => {
             info!(
-                "Successfully created MongoDB indexes for 'products' collection: {:?}",
+                "Successfully created MongoDB indexes for 'openfoodfacts_products' collection: {:?}",
                 result.index_names
             );
             Ok(())
