@@ -17,7 +17,7 @@ class UserProfileAdapter extends TypeAdapter<UserProfile> {
       for (int i = 0; i < numOfFields; i++) reader.readByte(): reader.read(),
     };
     return UserProfile(
-      userId: fields[0] as String?,
+      userId: fields[0] as String,
       username: fields[1] as String?,
       email: fields[2] as String?,
       allergens: (fields[3] as List?)?.cast<String>(),

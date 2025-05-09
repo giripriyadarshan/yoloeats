@@ -1,7 +1,9 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/user_profile.dart';
 import '../../models/allergen_info.dart';
 import '../local/user_profile_local_data_source.dart';
 import '../remote/user_profile_api_service.dart';
+import '../../providers/auth_providers.dart';
 
 abstract class UserProfileRepository {
   Future<UserProfile?> getUserProfile();
@@ -12,104 +14,119 @@ abstract class UserProfileRepository {
 
 class UserProfileRepositoryImpl implements UserProfileRepository {
   final UserProfileLocalDataSource _localDataSource;
-  final UserProfileApiService _apiService; // Add API service dependency
+  final UserProfileApiService _apiService;
+  final Ref _ref;
 
-  UserProfileRepositoryImpl(this._localDataSource, this._apiService);
+  UserProfileRepositoryImpl(this._localDataSource, this._apiService, this._ref);
 
   @override
   Future<UserProfile?> getUserProfile() async {
     print("Repository: Getting user profile...");
+
+    final userId = _ref.read(currentUserIdProvider);
+    if (userId == null || userId.isEmpty) {
+      print("Repository Error: Cannot get user profile. User ID is null or empty.");
+      return null;
+    }
+    print("Repository: Using userId: $userId");
+
     try {
-      // 1. Try local cache first (synchronous call)
       final localProfile = _localDataSource.getUserProfile();
-      if (localProfile != null) {
-        print("Repository: Profile loaded from Hive cache.");
+      if (localProfile != null && localProfile.userId == userId) {
+        print("Repository: Profile for userId $userId loaded from Hive cache.");
         return localProfile;
+      } else if (localProfile != null && localProfile.userId != userId) {
+        print("Repository: Stale profile found in cache (different userId), ignoring.");
       }
 
-      // 2. If no local data, fetch from API (asynchronous call)
-      print("Repository: No local profile found, fetching from API...");
-      final apiProfile = await _apiService.fetchProfile();
+      print("Repository: No valid local profile found for userId $userId, fetching from API...");
+      final apiProfile = await _apiService.fetchProfile(userId); // Pass userId here
 
-      // 3. If API fetch succeeds, save to local cache and return
       if (apiProfile != null) {
-        print("Repository: Profile fetched from API, saving to Hive.");
+        print("Repository: Profile fetched from API for userId $userId, saving to Hive.");
         await _localDataSource.saveUserProfile(apiProfile);
         return apiProfile;
       } else {
-        print("Repository: API returned no profile (404 or null).");
+        print("Repository: API returned no profile for userId $userId (404 or null).");
+        if (localProfile != null) {
+          await _localDataSource.deleteUserProfile();
+          print("Repository: Deleted stale local profile after API returned null.");
+        }
         return null;
       }
-    } catch (e) {
-      print("Repository: Error in getUserProfile: $e");
-      // Fallback: Attempt to return stale local data on API error
+    } catch (e, stackTrace) {
+      print("Repository: Error in getUserProfile for userId $userId: $e");
+      print("Repository StackTrace: $stackTrace");
       try {
         final localProfile = _localDataSource.getUserProfile();
-        if (localProfile != null) {
-          print("Repository: API failed, returning potentially stale profile from Hive.");
-          return localProfile; // Return local data if API fails
+        if (localProfile != null && localProfile.userId == userId) {
+          print("Repository: API failed for userId $userId, returning potentially stale profile from Hive.");
+          return localProfile;
         }
       } catch (localError) {
-        print("Repository: Error fetching from local cache during API failure fallback: $localError");
+        print("Repository: Error fetching from local cache during API failure fallback for userId $userId: $localError");
       }
-      // If API failed AND local fetch failed (or was null initially), indicate failure
       return null;
     }
   }
 
   @override
   Future<void> saveUserProfile(UserProfile profile) async {
-    print("Repository: Saving user profile...");
-    try {
-      // 1. Save locally immediately for responsiveness
-      await _localDataSource.saveUserProfile(profile);
-      print("Repository: Profile saved locally to Hive.");
+    final String userId = profile.userId;
+    if (userId.isEmpty) {
+      print("Repository Error: Cannot save profile. Profile object has empty userId.");
+      throw ArgumentError('Profile to save must have a non-empty userId');
+    }
+    print("Repository: Saving user profile for userId: $userId...");
 
-      // 2. Attempt to save to backend asynchronously
-      _apiService.saveProfile(profile).then((updatedProfileFromApi) {
-        print("Repository: Profile successfully synced with backend.");
-        print("Repository: Updating local cache with synced data from backend.");
+    try {
+      await _localDataSource.saveUserProfile(profile);
+      print("Repository: Profile for userId $userId saved locally to Hive.");
+
+      _apiService.saveProfile(userId, profile).then((updatedProfileFromApi) {
+        print("Repository: Profile for userId $userId successfully synced with backend.");
         _localDataSource.saveUserProfile(updatedProfileFromApi).catchError((localUpdateError) {
-          print("Repository: Error updating local cache after successful API sync: $localUpdateError");
+          print("Repository: Error updating local cache for userId $userId after successful API sync: $localUpdateError");
         });
-      }).catchError((error) {
-        print("Repository: Failed to sync profile with backend: $error");
+      }).catchError((error, stackTrace) {
+        print("Repository: Failed to sync profile for userId $userId with backend: $error");
+        print("Repository Save StackTrace: $stackTrace");
         // TODO: Implement offline queueing mechanism here for robust sync.
+        // For now, the local save has already happened.
       });
-    } catch (e) {
-      print("Repository: Error saving profile locally: $e");
+    } catch (e, stackTrace) {
+      print("Repository: Error saving profile locally for userId $userId: $e");
+      print("Repository Save Local StackTrace: $stackTrace");
       rethrow;
     }
   }
 
   @override
   Future<void> deleteUserProfile() async {
-    print("Repository: Deleting user profile...");
+    final userId = _ref.read(currentUserIdProvider);
+    if (userId == null || userId.isEmpty) {
+      print("Repository Error: Cannot delete user profile. User ID is null or empty.");
+      return;
+    }
+    print("Repository: Deleting user profile for userId: $userId...");
+
     try {
-      // 1. Delete locally first
       await _localDataSource.deleteUserProfile();
-      print("Repository: Profile deleted locally from Hive.");
+      print("Repository: Profile deleted locally from Hive for key 'currentUser'.");
 
-      // 2. Attempt to delete from backend asynchronously
-      // TODO: Implement _apiService.deleteProfile() if backend supports it
-      // _apiService.deleteProfile(profile.userId).then((_) { // Assuming userId is needed
-      //    print("Repository: Profile successfully deleted on backend.");
-      // }).catchError((error) {
-      //    print("Repository: Failed to delete profile on backend: $error");
-      //    // TODO: Implement offline queueing for deletion? Or just log?
-      // });
+      // TODO: Implement _apiService.deleteProfile(userId)
 
-    } catch (e) {
-      print("Repository: Error deleting profile locally: $e");
+    } catch (e, stackTrace) {
+      print("Repository: Error deleting profile locally for userId $userId: $e");
+      print("Repository Delete StackTrace: $stackTrace");
       rethrow;
     }
   }
 
   @override
   Future<List<AllergenInfo>> getAllergens() async {
-    print("Repository: Getting allergens...");
+    print("Repository: Getting global allergens list...");
     try {
-      // 1. Try local cache first
       final localAllergens = _localDataSource.getAllergens();
       if (localAllergens.isNotEmpty) {
         print("Repository: Allergens loaded from Hive cache.");
@@ -117,11 +134,9 @@ class UserProfileRepositoryImpl implements UserProfileRepository {
         return localAllergens;
       }
 
-      // 2. If no local data, fetch from API
       print("Repository: No local allergens found, fetching from API...");
       final apiAllergens = await _apiService.fetchAllergens();
 
-      // 3. Save API result to local cache (fire and forget is ok here)
       if (apiAllergens.isNotEmpty) {
         print("Repository: Allergens fetched from API, saving to Hive.");
         _localDataSource.saveAllergens(apiAllergens).catchError((e) {
@@ -130,12 +145,13 @@ class UserProfileRepositoryImpl implements UserProfileRepository {
       }
       return apiAllergens;
 
-    } catch (e) {
+    } catch (e, stackTrace) {
       print("Repository: Error in getAllergens: $e");
+      print("Repository Allergens StackTrace: $stackTrace");
       try {
         final localAllergens = _localDataSource.getAllergens();
         if (localAllergens.isNotEmpty) {
-          print("Repository: API failed, returning potentially stale allergens from Hive.");
+          print("Repository: API failed for allergens, returning potentially stale list from Hive.");
           return localAllergens;
         }
       } catch (localError) {

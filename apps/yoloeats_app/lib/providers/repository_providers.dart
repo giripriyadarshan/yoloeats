@@ -9,7 +9,7 @@ final userProfileRepositoryProvider = Provider<UserProfileRepository>(
       (ref) {
     final localDataSource = ref.watch(userProfileLocalDataSourceProvider);
     final apiService = ref.watch(userProfileApiServiceProvider);
-    return UserProfileRepositoryImpl(localDataSource, apiService);
+    return UserProfileRepositoryImpl(localDataSource, apiService, ref);
   },
 );
 

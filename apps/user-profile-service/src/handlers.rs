@@ -1,6 +1,6 @@
 use crate::{
     errors::{AppError, Result},
-    models::{AllergenInfo, RiskLevel, UpdateProfilePayload, UserProfile},
+    models::{AllergenInfo, UpdateProfilePayload, UserProfile},
     state::AppState,
 };
 use axum::{

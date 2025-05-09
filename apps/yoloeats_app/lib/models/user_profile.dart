@@ -33,7 +33,7 @@ enum RiskLevel {
 @HiveType(typeId: 0)
 class UserProfile extends HiveObject with EquatableMixin {
   @HiveField(0)
-  final String? userId;
+  final String userId;
 
   @HiveField(1)
   final String? username;
@@ -51,7 +51,7 @@ class UserProfile extends HiveObject with EquatableMixin {
   final RiskLevel riskTolerance;
 
   UserProfile({
-    this.userId,
+    required this.userId,
     this.username,
     this.email,
     List<String>? allergens,
@@ -61,8 +61,12 @@ class UserProfile extends HiveObject with EquatableMixin {
         dietaryPrefs = dietaryPrefs ?? [];
 
   factory UserProfile.fromJson(Map<String, dynamic> json) {
+    if (json['user_id'] == null) {
+      throw FormatException("Missing required field 'user_id' in UserProfile JSON");
+    }
+
     return UserProfile(
-      userId: json['user_id'] as String?,
+      userId: json['user_id'] as String,
       username: json['username'] as String?,
       email: json['email'] as String?,
       allergens: json['allergens'] == null
@@ -77,7 +81,7 @@ class UserProfile extends HiveObject with EquatableMixin {
 
   Map<String, dynamic> toJson() {
     return {
-      if (userId != null) 'user_id': userId,
+      'user_id': userId,
       if (username != null) 'username': username,
       if (email != null) 'email': email,
       'allergens': allergens,
@@ -105,9 +109,8 @@ class UserProfile extends HiveObject with EquatableMixin {
     List<String>? dietaryPrefs,
     RiskLevel? riskTolerance,
   }) {
-    bool userIdChanged = userId != null && this.userId != userId;
     return UserProfile(
-      userId: userIdChanged ? userId : (userId ?? this.userId),
+      userId: userId ?? this.userId,
       username: username ?? this.username,
       email: email ?? this.email,
       allergens: allergens ?? this.allergens,
