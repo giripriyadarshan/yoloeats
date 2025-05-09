@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/check_result.dart';
 import '../../providers/product_providers.dart';
 import '../../providers/allergy_check_providers.dart';
+import '../widgets/recommendations_bottom_sheet.dart';
 
 class ProductDetailScreen extends ConsumerWidget {
   final String productIdentifier;
@@ -75,12 +76,25 @@ class ProductDetailScreen extends ConsumerWidget {
                       icon: const Icon(Icons.recommend_outlined),
                       label: const Text('Find Safe Alternatives'),
                       onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
+                        if (product != null && product.id.isNotEmpty) {
+                          showModalBottomSheet(
+                            context: context,
+                            isScrollControlled: true,
+                            shape: const RoundedRectangleBorder(
+                              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                            ),
+                            builder: (BuildContext modalContext) {
+                              return RecommendationsBottomSheet(productId: product.id);
+                            },
+                          );
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                              content: Text('Find Safe Alternatives feature coming soon!'),
-                              duration: Duration(seconds: 2),
-                            )
-                        );
+                              content: Text('Cannot fetch recommendations: Product ID is missing or product data is unavailable.'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.amber[100],

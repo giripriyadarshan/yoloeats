@@ -1,14 +1,16 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/tflite_service.dart';
 
-enum ScannerMode {
-  Barcode,
-  ObjectDetection,
-  Ocr,
+enum ScanMode {
+  none,
+  objectDetection,
+  barcodeScanning,
+  ocr
 }
-final currentScannerModeProvider = StateProvider<ScannerMode>((ref) {
-  print("Initializing currentScannerModeProvider: ScannerMode.Barcode");
-  return ScannerMode.Barcode; // Default mode
+
+final scanModeProvider = StateProvider<ScanMode>((ref) {
+  print("Initializing scanModeProvider: ScanMode.none");
+  return ScanMode.none;
 });
 
 final yoloDetectionsProvider = StateProvider<List<Recognition>>((ref) {
