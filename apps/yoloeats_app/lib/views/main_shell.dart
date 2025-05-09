@@ -16,7 +16,7 @@ class MainShell extends ConsumerStatefulWidget {
 }
 
 class _MainShellState extends ConsumerState<MainShell> {
-  int _selectedIndex = 0;
+  int _selectedIndex = 2;
   bool _isLoadingServices = true;
   String _loadingMessage = "Initializing...";
 
