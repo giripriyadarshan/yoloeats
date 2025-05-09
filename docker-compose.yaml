@@ -1,4 +1,4 @@
-services: 
+services:
   # --- Databases & Caches ---
   mongodb:
     image: mongo:latest
@@ -8,9 +8,9 @@ services:
     volumes:
       - mongo-data:/data/db
     environment:
-       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
-       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASS}
-       MONGO_INITDB_DATABASE: allergy_app_dev
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASS}
+      MONGO_INITDB_DATABASE: allergy_app_dev
     networks:
       - app-network
     restart: unless-stopped
@@ -19,9 +19,9 @@ services:
     image: redis:alpine
     container_name: redis_dev
     ports:
-      - "6379:6379" 
+      - "6379:6379"
     volumes:
-      - redis-data:/data 
+      - redis-data:/data
     networks:
       - app-network
     restart: unless-stopped
@@ -30,12 +30,15 @@ services:
     image: neo4j:latest
     container_name: neo4j_dev
     ports:
-      - "7474:7474" 
-      - "7687:7687" 
+      - "7474:7474"
+      - "7687:7687"
     volumes:
+      - ./neo4j_data/import:/var/lib/neo4j/import
       - neo4j-data:/data
     environment:
-      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD} 
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD}
+      NEO4J_dbms_security_allow__csv__import__from__file__urls: "true"
+      NEO4J_dbms_directories_import=: "import"
       # NEO4J_PLUGINS: '["graph-data-science"]'
     networks:
       - app-network
@@ -45,10 +48,10 @@ services:
     image: qdrant/qdrant:latest
     container_name: qdrant_dev
     ports:
-      - "6333:6333" 
-      - "6334:6334" 
+      - "6333:6333"
+      - "6334:6334"
     volumes:
-      - qdrant-data:/qdrant/storage 
+      - qdrant-data:/qdrant/storage
       # - ./qdrant/config.yaml:/qdrant/config/production.yaml
     # command: ["./qdrant", "--config-path", "/qdrant/config/production.yaml"] # If using custom config
     networks:
@@ -60,8 +63,8 @@ services:
     image: rabbitmq:latest
     container_name: rabbitmq_dev
     ports:
-      - "5672:5672" 
-      - "15672:15672" 
+      - "5672:5672"
+      - "15672:15672"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq/
     environment:
