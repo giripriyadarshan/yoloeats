@@ -141,7 +141,7 @@ def create_embedding_text(product: Dict[str, Any]) -> str:
         f"Ingredients: {ingredients}" if ingredients else ""
     ]
     text_to_embed = " ".join(filter(None, parts)).strip()
-    return text_to_embed if text_to_embed else "product information unavailable"
+    return text_to_embed # Return empty string if no parts were joined
 
 def main():
     logging.info("Starting offline data processing for Qdrant...")
@@ -209,6 +209,10 @@ def main():
                         continue
 
                     text_to_embed = create_embedding_text(product)
+                    if not text_to_embed:
+                        logging.warning(f"Skipping product MongoID {mongo_oid_str} (code: {product.get('code', 'N/A')}) due to no text content for embedding.")
+                        pbar.update(1)
+                        continue
 
                     try:
                         vector = embedding_model.encode(text_to_embed).tolist()

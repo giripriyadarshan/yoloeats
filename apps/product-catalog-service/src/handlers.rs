@@ -631,13 +631,16 @@ pub async fn get_recommendations(
         product_id_str
     );
 
-    let source_qdrant_uuid = Uuid::new_v5(&Uuid::NAMESPACE_DNS, product_id_str.as_bytes());
+    // Ensure canonical representation for UUID generation
+    let product_id_str_canonical = product_id_str.to_lowercase();
+
+    let source_qdrant_uuid = Uuid::new_v5(&Uuid::NAMESPACE_DNS, product_id_str_canonical.as_bytes());
     let source_qdrant_uuid_str = source_qdrant_uuid.to_string();
     let target_point_id_for_qdrant_vector_fetch: PointId = source_qdrant_uuid_str.clone().into();
 
     debug!(
-        "Source product Mongo OID: {}, Qdrant UUID for vector fetch: {}",
-        product_id_str, source_qdrant_uuid_str
+        "Source product Mongo OID: {} (canonical: {}), Qdrant UUID for vector fetch: {}",
+        product_id_str, product_id_str_canonical, source_qdrant_uuid_str
     );
 
     let get_request = GetPointsBuilder::new(
