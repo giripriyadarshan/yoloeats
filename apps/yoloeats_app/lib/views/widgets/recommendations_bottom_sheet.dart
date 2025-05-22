@@ -34,6 +34,7 @@ class RecommendationsBottomSheet extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    debugPrint("RecommendationsBottomSheet: Building for productId: $productId");
     // Watch the recommendations provider using the passed productId
     final recommendationsAsync = ref.watch(recommendationsProvider(productId));
 
@@ -54,7 +55,7 @@ class RecommendationsBottomSheet extends ConsumerWidget {
             child: recommendationsAsync.when(
               loading: () => const Center(child: CircularProgressIndicator()),
               error: (err, stack) {
-                print("Error loading recommendations: $err\n$stack");
+                debugPrint("Error loading recommendations for productId: $productId. Error: $err\n$stack");
                 return Center(
                   child: Text(
                     'Could not load recommendations.\n${err.toString()}',
