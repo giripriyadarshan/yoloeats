@@ -98,7 +98,7 @@ pub async fn get_product_by_id(
     }
 
     debug!(id = %object_id, "Fetching product from MongoDB by ID");
-    let collection = state.mongo_db.collection::<Product>("products");
+    let collection = state.mongo_db.collection::<Product>("openfoodfacts_products");
     let db_product = collection
         .find_one(doc! { "_id": object_id })
         .await
@@ -141,6 +141,7 @@ pub async fn get_product_by_barcode(
     State(state): State<Arc<AppState>>,
     Path(barcode): Path<String>,
 ) -> Result<Json<Product>> {
+    info!("Received request for barcode (raw): '{}'", barcode);
     info!("Attempting to get product by barcode: {}", barcode);
 
     let cache_key = product_code_cache_key(&barcode);
@@ -176,9 +177,11 @@ pub async fn get_product_by_barcode(
     }
 
     debug!(code = %barcode, "Fetching product from MongoDB by barcode");
-    let collection = state.mongo_db.collection::<Product>("products");
+    let collection = state.mongo_db.collection::<Product>("openfoodfacts_products");
+    let query_doc = doc! { "code": &barcode };
+    debug!(code = %barcode, query = ?query_doc, "Constructing MongoDB query for barcode");
     let db_product = collection
-        .find_one(doc! { "code": &barcode })
+        .find_one(query_doc)
         .await
         .map_err(|e| {
             error!(code = %barcode, "MongoDB find_one by code failed: {}", e);
@@ -324,7 +327,7 @@ pub async fn search_products(
         .build();
     debug!("Applying pagination: limit={}, skip={}", limit, skip);
 
-    let collection = state.mongo_db.collection::<Product>("products");
+    let collection = state.mongo_db.collection::<Product>("openfoodfacts_products");
     let cursor = collection
         .find(filter)
         .with_options(find_options)
@@ -379,8 +382,8 @@ pub async fn create_product(
     };
     debug!(product = ?new_product, "Constructed new product struct");
 
-    let collection = state.mongo_db.collection::<Product>("products");
-    debug!("Obtained handle to collection: products");
+    let collection = state.mongo_db.collection::<Product>("openfoodfacts_products");
+    debug!("Obtained handle to collection: openfoodfacts_products");
 
     let insert_result = collection.insert_one(&new_product).await.map_err(|e| {
         if let ErrorKind::Write(mongodb::error::WriteFailure::WriteError(write_error)) =
@@ -459,7 +462,7 @@ pub async fn update_product(
 
     if set_doc.is_empty() {
         warn!(id = %object_id, "Update request received with no fields to update.");
-        let collection = state.mongo_db.collection::<Product>("products");
+        let collection = state.mongo_db.collection::<Product>("openfoodfacts_products");
         return collection
             .find_one(doc! {"_id": object_id})
             .await
@@ -475,7 +478,7 @@ pub async fn update_product(
     let update_doc = doc! { "$set": set_doc };
     debug!(id = %object_id, update = ?update_doc, "Constructed update document");
 
-    let collection = state.mongo_db.collection::<Product>("products");
+    let collection = state.mongo_db.collection::<Product>("openfoodfacts_products");
     let options = FindOneAndUpdateOptions::builder()
         .return_document(ReturnDocument::After)
         .build();
@@ -553,7 +556,7 @@ pub async fn delete_product(
     })?;
     debug!("Parsed ObjectId: {}", object_id);
 
-    let collection = state.mongo_db.collection::<Product>("products");
+    let collection = state.mongo_db.collection::<Product>("openfoodfacts_products");
 
     let product_to_delete = collection
         .find_one(doc! { "_id": object_id })
@@ -876,7 +879,7 @@ pub async fn get_recommendations(
     );
 
     let mongo_filter = doc! { "code": { "$in": final_barcodes_to_fetch } };
-    let collection = state.mongo_db.collection::<Product>("products");
+    let collection = state.mongo_db.collection::<Product>("openfoodfacts_products");
 
     let cursor = collection
         .find(mongo_filter)

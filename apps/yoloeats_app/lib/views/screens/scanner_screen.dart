@@ -500,6 +500,8 @@ class _ScannerScreenState extends ConsumerState<ScannerScreen> {
 
     final List<Barcode> barcodes = capture.barcodes;
     if (barcodes.isNotEmpty) {
+      // Add the print statement here
+      print("ScannerScreen: Raw barcode detected: '${barcodes.first.rawValue}'");
       final String? detectedCode = barcodes.first.rawValue;
       if (detectedCode != null && detectedCode.isNotEmpty) {
         _mobileScannerController.stop();

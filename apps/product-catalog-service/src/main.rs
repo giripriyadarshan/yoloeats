@@ -86,7 +86,7 @@ async fn main() -> Result<()> {
     let http_client = HttpClient::new();
     info!("Reqwest HTTP client created.");
 
-    // db_setup::create_indexes(&db_handle).await?;
+    db_setup::create_indexes(&db_handle).await?;
     info!("MongoDB indexes checked/created successfully.");
 
     let app_state = Arc::new(AppState {
